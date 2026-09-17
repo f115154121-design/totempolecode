@@ -1,0 +1,636 @@
+#include "DSP28x_Project.h"
+#include "F2806x_EPwm_defines.h"
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include "SFO_V6.h"
+
+extern Uint16 RamfuncsLoadStart;
+extern Uint16 RamfuncsLoadEnd;
+extern Uint16 RamfuncsRunStart;
+extern Uint16 RamfuncsLoadSize;
+
+//電流參數
+Uint32 Iout = 2000;
+float Vout = 0;
+static float Iout_filt = 2000;
+float alpha_I = 0.0314; //LPF
+Uint16 Rerf_I = 1000;
+int Iout_adc = 0, Vout_adc = 0;
+float Iout_real = 0, Iout_adc_LPF = 0;
+float Vout_real = 0, Vout_adc_LPF = 0, Vout_adc_LPF1 = 0;
+
+
+//頻率濾波參數
+static float f_filt = 0;
+static float alpha_f = 0.1;
+
+Uint16 Verror = 0;
+Uint16 Ierror = 0;
+Uint16 ZVS = 0;
+int16 Z1 = 0;
+
+float phi1 = 0;
+float phi2 = 0;
+
+
+//控制要用到的變數
+volatile Uint16 duty_enable = 0;
+volatile Uint16 sync_step = 0;  //從內部轉到外部同步
+Uint16 state = 0;
+float d1 = 0;
+float duty_now = 0.0f;
+
+
+//PI
+volatile Uint32 duty_deg = 1000;      //每幾次中斷才移動一次
+volatile Uint32 duty_count = 0;       //計數器
+volatile Uint32 pi_deg = 1000;        //每幾次中斷(20)才計算pi
+volatile Uint32 pi_count = 0;         //計數器
+
+
+float delta_alpha =0;   //alpha
+float alpha = 0;
+float a1 = 0;
+float drx = 0; // 國科會
+
+volatile Uint32 f_count = 0;
+
+static Uint16 f_buf[2] = {900,900};//filter
+Uint16 a = 0;
+Uint16 b = 0;
+Uint16 c = 0;
+Uint16 d = 0;
+
+static Uint16 last_hardware_prd = 450;
+Uint16 new_prd = 0;
+Uint32 f0 = 0;
+//////////////////////////////確認緩啟動無問題
+
+void Adc(void);       //輸出電壓電流取樣
+void EPWM_S7S8(void); //開關S7跟S8
+void EPWM_S5S6(void); //開關S5跟S6
+void GPIO_32(void);   //外部同步輸入
+void GPIO_18(void);
+void GPIO_14(void);
+void eCAP1(void);
+void eCAP2(void);
+void eCAP3(void);
+
+void f_cal(void);
+void p_cal(void);
+void Adc_LPF(void);
+
+interrupt void EPWM1_ISR(void);
+
+int MEP_ScaleFactor = 0;
+
+volatile struct EPWM_REGS *ePWM[] =
+{
+    0,               // index 0 不使用（為了與 ePWM1~對齊）
+    &EPwm1Regs,      // ePWM1
+    &EPwm2Regs       // ePWM2
+};
+
+void main(void)
+{
+
+    InitSysCtrl();
+    DINT;
+    InitPieCtrl();
+
+    IER = 0x0000;
+    IFR = 0x0000;
+
+    InitPieVectTable();
+
+    memcpy(&RamfuncsRunStart, &RamfuncsLoadStart, (Uint32)&RamfuncsLoadSize);
+    InitFlash();
+    InitGpio();
+    InitAdc();
+    InitEPwm();
+    InitCpuTimers();
+
+    while (SFO() == 0)
+    {
+
+    }
+
+    int status;
+    status = SFO();
+    if(status==2) {ESTOP0;}
+
+    EALLOW;
+    SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC  = 0;
+    EDIS;
+
+    EALLOW;
+    PieVectTable.EPWM1_INT = &EPWM1_ISR;
+    EDIS;
+
+    PieCtrlRegs.PIECTRL.bit.ENPIE = 1;
+    PieCtrlRegs.PIEIER3.bit.INTx1 = 1;  //ePWM1中斷
+    IER |= M_INT3;
+    IER |= M_INT1;
+
+    EINT;
+    ERTM;
+
+    Adc();
+    eCAP1();
+    GPIO_32();
+    GPIO_18();
+    GPIO_14();
+    EPWM_S5S6();
+    EPWM_S7S8();
+
+    EALLOW;
+    EPwm1Regs.AQCSFRC.bit.CSFA = 1;
+    EPwm1Regs.AQCSFRC.bit.CSFB = 1;
+    EPwm2Regs.AQCSFRC.bit.CSFA = 2;
+    EPwm2Regs.AQCSFRC.bit.CSFB = 2;
+    EDIS;
+
+    EALLOW;
+    SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
+    EDIS;
+
+
+    for(;;)
+    {
+        drx = (((phi1-delta_alpha+11)*100) / (last_hardware_prd));
+        alpha = (((d1 + 21 + a1) *180)/ last_hardware_prd );
+        ZVS = (phi1 > (float)d1);
+    }
+}
+
+interrupt void EPWM1_ISR(void)
+{
+    GpioDataRegs.GPASET.bit.GPIO19 = 1;
+
+    Iout = AdcResult.ADCRESULT5;
+    Vout = AdcResult.ADCRESULT4;
+
+    Iout_adc = AdcResult.ADCRESULT5 - 1991;
+    Vout_adc = AdcResult.ADCRESULT4 - 7;
+    Adc_LPF();
+    Iout_real = Iout_adc_LPF * 0.016296;
+    Vout_real = Vout_adc_LPF * 0.02125;
+
+
+    // --- 保護 (state = 1) ---
+    if (((Iout_filt > 1) && (Iout_filt < 400)) || (Vout > 3000))	//約-24A、63.6V
+    {
+        EALLOW;
+        EPwm1Regs.AQCSFRC.bit.CSFA = 1;
+        EPwm1Regs.AQCSFRC.bit.CSFB = 1;
+        EPwm2Regs.AQCSFRC.bit.CSFA = 2;
+        EPwm2Regs.AQCSFRC.bit.CSFB = 2;
+        GpioDataRegs.GPACLEAR.bit.GPIO18 = 1; // 關閉一次側
+        EDIS;
+        if ((Iout_filt > 1) && (Iout_filt < 400))
+        {
+            Ierror = 1;
+        }
+        if (Vout > 3000)
+        {
+            Verror = 1;
+        }
+        duty_enable = 0;
+        state = 1;
+    }
+
+    // --- 2. 控制區塊 ---
+    if (state != 1)
+    {
+        // === 失去同步訊號 待機狀態===
+        if ((ECap1Regs.TSCTR > 2000))
+        {
+            EALLOW;
+            EPwm1Regs.AQCSFRC.bit.CSFA = 1;
+            EPwm1Regs.AQCSFRC.bit.CSFB = 1;
+            EPwm2Regs.AQCSFRC.bit.CSFA = 2;
+            EPwm2Regs.AQCSFRC.bit.CSFB = 2;
+            EDIS;
+
+            duty_enable = 0;
+            state = 2;
+            sync_step = 0;
+            d1 = 0;
+            duty_now = 0;
+            EPwm1Regs.TBPHS.half.TBPHS = 0;
+            EPwm2Regs.TBPHS.half.TBPHS = 0;
+
+            // 重置計算變數
+            duty_count = 0;
+        }
+        // === 工作狀態 ===
+        else
+        {
+            f_cal();
+            p_cal();
+            // 同步邏輯 (轉成外部同步)
+            if (sync_step == 0)
+            {
+                EALLOW;
+                EPwm1Regs.TBPRD = last_hardware_prd;
+                EPwm2Regs.TBPRD = last_hardware_prd;
+                EPwm1Regs.TBCTL.bit.PHSEN = 1;
+                EPwm2Regs.TBCTL.bit.PHSEN = 1;
+                EDIS;
+                sync_step = 1;
+            }
+            // 狀態機
+            switch (state)
+            {
+                case 2:
+                    if(GpioDataRegs.GPADAT.bit.GPIO14 == 0)
+                    {
+                        duty_enable = 1;
+                        state = 3; //進入控制模式
+                        EALLOW;
+                        EPwm1Regs.AQCSFRC.all = 0;
+                        EPwm2Regs.AQCSFRC.all = 0;
+                        EDIS;
+                    }
+                    break;
+
+                case 3:
+                    if (++duty_count >= duty_deg)
+                    {
+                        duty_count = 0;
+                        if (duty_now < 0.83) duty_now += 0.01; //
+                        //else state = 4;
+                    }
+                    break;
+
+                case 4:
+                    if (++pi_count >= pi_deg)
+                    {
+                        pi_count = 0;
+                        if (Rerf_I < Iout_filt) duty_now += 0.005f;
+                        else if (Rerf_I > Iout_filt) duty_now -= 0.005f;
+
+                        if (duty_now > 1.0f) duty_now = 1.0f;
+                        if (duty_now < 0.2f) duty_now = 0.2f;
+                    }
+                    break;
+
+            }
+            // 更新相位暫存器 (只在訊號正常時更新)
+            phi1 = (d1-((1.0f-duty_now)*d1)+a1);
+            phi2 = (d1+((1.0f-duty_now)*d1)+a1);
+            EPwm1Regs.TBPHS.half.TBPHS = phi1;
+            EPwm2Regs.TBPHS.half.TBPHS = phi2;
+
+
+        }
+    }
+
+    EPwm1Regs.ETCLR.bit.INT = 1;
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;
+
+    GpioDataRegs.GPACLEAR.bit.GPIO19 = 1;
+}
+void f_cal(void)
+{
+    if (ECap1Regs.TSCTR > 2000)
+    {
+        return;
+    }
+    //1.取樣頻率
+    a = ECap1Regs.CAP2;
+    b = f_buf[0];
+    c = f_buf[1];
+
+    //2.突波濾除
+    if ((a <= b && b <= c) || (c <= b && b <= a))
+    {
+        d = b;
+    }
+    else if ((b <= a && a <= c) || (c <= a && a <= b))
+    {
+        d = a;
+    }
+    else
+    {
+        d = c;
+    }
+        f_buf[1] = b;
+        f_buf[0] = a;
+    //3.一階低通濾波
+    f_filt += (alpha_f * (float)(d - f_filt));
+    new_prd = (Uint16)(f_filt * 0.5f);
+
+    //4.變頻率
+    if (++f_count >= 1)
+    {
+        f_count = 0;
+        // 1. 如果新計算的值比目前硬體值大，步長加 1
+        if (new_prd > last_hardware_prd)
+        {
+           last_hardware_prd += 1;
+
+        }
+        // 2. 如果新計算的值比目前硬體值小，步長減 1
+        if (new_prd < last_hardware_prd)
+        {
+           last_hardware_prd -= 1;
+        }
+        EALLOW;
+        EPwm1Regs.TBPRD = last_hardware_prd;
+        EPwm2Regs.TBPRD = last_hardware_prd;
+        EPwm1Regs.CMPA.half.CMPA       = (last_hardware_prd >> 1);
+        EPwm2Regs.CMPA.half.CMPA       = (last_hardware_prd >> 1);
+        EDIS;
+    }
+}
+//角度計算
+void p_cal(void)
+{
+    if (!duty_enable)
+    {
+        EPwm2Regs.TBPHS.half.TBPHS = (last_hardware_prd - 42);
+    }
+    d1 = ((last_hardware_prd >> 1) - 21);   //重疊中心點
+    a1 = (last_hardware_prd*0.0777778);   //(alpha/180)
+}
+//電流平均
+void Adc_LPF(void)
+{
+    //  低通濾波
+    Iout_filt = (alpha_I * Iout)+ ((1.0 - alpha_I) * Iout_filt);
+
+    Iout_adc_LPF = (alpha_I * Iout_adc)+ ((1.0 - alpha_I) * Iout_adc_LPF);
+
+    Vout_adc_LPF = (0.0006 * Vout_adc)+ ((0.9994) * Vout_adc_LPF1);		//fc=10Hz
+    Vout_adc_LPF1 = Vout_adc_LPF;
+}
+
+void Adc(void)
+{
+    EALLOW;
+    AdcRegs.ADCCTL2.bit.ADCNONOVERLAP = 1;    // Enable non-overlap mode
+    AdcRegs.ADCCTL1.bit.INTPULSEPOS   = 1;    // ADCINT1 trips after AdcResults latch
+    AdcRegs.INTSEL1N2.bit.INT1E       = 1;    // enable ADCINT1
+    AdcRegs.INTSEL1N2.bit.INT1CONT    = 0;    // Disable ADCINT1 Continuous mode
+    AdcRegs.INTSEL1N2.bit.INT1SEL     = 4;    // setup EOC1 to trigger ADCINT1 to fire
+
+    //ADCINA0
+    AdcRegs.ADCSOC4CTL.bit.CHSEL      = 4;    // ADCINA4
+    AdcRegs.ADCSOC4CTL.bit.TRIGSEL    = 5;    // trigger on EPWM1A
+    AdcRegs.ADCSOC4CTL.bit.ACQPS      = 9;    // 10 ADCCLK
+    //ADCINA1
+    AdcRegs.ADCSOC5CTL.bit.CHSEL      = 5;    // ADCINA5
+    AdcRegs.ADCSOC5CTL.bit.TRIGSEL    = 5;    // trigger on EPWM1A
+    AdcRegs.ADCSOC5CTL.bit.ACQPS      = 9;    // 10 ADCCLK
+
+    EPwm1Regs.ETSEL.bit.SOCAEN  = 1;
+    EPwm1Regs.ETSEL.bit.SOCASEL = 4;
+    EPwm1Regs.ETPS.bit.SOCAPRD  = 1;
+    EDIS;
+}
+//外部同步輸入
+void GPIO_32(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPBPUD.bit.GPIO32   = 0;
+    GpioCtrlRegs.GPBMUX1.bit.GPIO32  = 2;
+    GpioCtrlRegs.GPBDIR.bit.GPIO32   = 0;
+    GpioCtrlRegs.GPBQSEL1.bit.GPIO32 = 2;
+    EDIS;
+}
+//一次側保護
+void GPIO_18(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPAMUX2.bit.GPIO18 = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO18  = 1;
+    GpioCtrlRegs.GPAPUD.bit.GPIO18  = 1;
+    GpioDataRegs.GPASET.bit.GPIO18  = 1;   // 設high
+    EDIS;
+}
+//一次側緩啟動完成
+void GPIO_14(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO14 = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO14  = 0;
+    GpioCtrlRegs.GPAPUD.bit.GPIO14  = 0;
+    GpioDataRegs.GPASET.bit.GPIO14  = 1;   // 設high
+    EDIS;
+}
+
+void eCAP1(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPAPUD.bit.GPIO24    = 0;
+    GpioCtrlRegs.GPAMUX2.bit.GPIO24   = 1;
+    GpioCtrlRegs.GPADIR.bit.GPIO24    = 0;
+    GpioCtrlRegs.GPAQSEL2.bit.GPIO24  = 0;
+    GpioCtrlRegs.GPACTRL.bit.QUALPRD3 = 10; //取樣週期
+
+    ECap1Regs.ECCTL1.bit.CAP1POL = 1; // Event1 down edge
+    ECap1Regs.ECCTL1.bit.CAP2POL = 0; // Event2 rise edge
+    ECap1Regs.ECCTL1.bit.CTRRST1 = 0; // Event1 reset counter
+    ECap1Regs.ECCTL1.bit.CTRRST2 = 1; // Event2 reset counter
+    ECap1Regs.ECCTL1.bit.CTRRST3 = 0; // Event3 reset counter
+    ECap1Regs.ECCTL1.bit.CTRRST4 = 0; // Event4 reset counter
+    ECap1Regs.ECCTL1.bit.CAPLDEN = 1; // Enable CAP register loads
+
+    ECap1Regs.ECCTL2.bit.CONT_ONESHT = 0; // Continuous mode
+    ECap1Regs.ECCTL2.bit.TSCTRSTOP   = 1; // Enable counter
+    ECap1Regs.ECCTL2.bit.SYNCI_EN    = 0; // Enable sync in
+    ECap1Regs.ECCTL2.bit.SYNCO_SEL   = 0; // Pass through sync signal
+    ECap1Regs.ECCTL2.bit.STOP_WRAP   = 1;
+
+    ECap1Regs.ECEINT.bit.CEVT1 = 0;      // 不開中斷on capture event 1
+    ECap1Regs.ECCLR.all        = 65535;  // Clear all interrupt flags
+    ECap1Regs.ECEINT.all = 0;
+    EDIS;
+}
+
+void eCAP2(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPAPUD.bit.GPIO25   = 1;
+    GpioCtrlRegs.GPAQSEL2.bit.GPIO25 = 0;
+    GpioCtrlRegs.GPAMUX2.bit.GPIO25  = 1;
+    GpioCtrlRegs.GPADIR.bit.GPIO25   = 0;
+    EDIS;
+
+    EALLOW;
+    ECap2Regs.ECCTL1.bit.CAP1POL = 0; // Event1 rising edge
+    ECap2Regs.ECCTL1.bit.CAP2POL = 1; // Event2 rising edge
+    ECap2Regs.ECCTL1.bit.CTRRST1 = 0; // Event1 reset counter
+    ECap2Regs.ECCTL1.bit.CTRRST2 = 1; // Event2 reset counter
+    ECap2Regs.ECCTL1.bit.CAPLDEN = 1; // Enable CAP register loads
+
+    ECap2Regs.ECCTL2.bit.CONT_ONESHT = 0; // Continuous mode
+    ECap2Regs.ECCTL2.bit.TSCTRSTOP   = 1; // Enable counter
+    ECap2Regs.ECCTL2.bit.SYNCI_EN    = 1; // Enable sync in
+    ECap2Regs.ECCTL2.bit.SYNCO_SEL   = 0; // Pass through sync signal
+
+    ECap2Regs.ECEINT.bit.CEVT2 = 1;      // Enable interrupt on capture event 2
+    ECap2Regs.ECCLR.all        = 65535;  // Clear all interrupt flags
+    ECap2Regs.ECEINT.all       = 4;      // Enable CEVT2 interrupt (bit2)
+    EDIS;
+}
+
+void eCAP3(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPAPUD.bit.GPIO26   = 1;
+    GpioCtrlRegs.GPAQSEL2.bit.GPIO26 = 0;
+    GpioCtrlRegs.GPAMUX2.bit.GPIO26  = 1;
+    GpioCtrlRegs.GPADIR.bit.GPIO26   = 0;
+    EDIS;
+
+    EALLOW;
+    ECap3Regs.ECCTL1.bit.CAP1POL = 0; // Event1 rise edge
+    ECap3Regs.ECCTL1.bit.CAP2POL = 1; // Event2 down edge
+    ECap3Regs.ECCTL1.bit.CTRRST1 = 0; // Event1 reset counter
+    ECap3Regs.ECCTL1.bit.CTRRST2 = 1; // Event2 reset counter
+    ECap3Regs.ECCTL1.bit.CAPLDEN = 1; // Enable CAP register loads
+
+    ECap3Regs.ECCTL2.bit.CONT_ONESHT = 0; // Continuous mode
+    ECap3Regs.ECCTL2.bit.TSCTRSTOP   = 1; // Enable counter
+    ECap3Regs.ECCTL2.bit.SYNCI_EN    = 1; // Enable sync in
+    ECap3Regs.ECCTL2.bit.SYNCO_SEL   = 0; // Pass through sync signal
+
+    ECap3Regs.ECEINT.bit.CEVT2 = 1;     // Enable interrupt on capture event 2
+    ECap3Regs.ECCLR.all        = 0xFFFF;       // Clear all interrupt flags
+    ECap3Regs.ECEINT.all       = 0x0004;      // Enable CEVT2 interrupt (bit2)
+    EDIS;
+}
+
+void EPWM_S5S6(void)
+{
+    //ePWM1 GPIO 00 01 設定
+    EALLOW;
+    GpioCtrlRegs.GPAPUD.bit.GPIO0  = 1;
+    GpioCtrlRegs.GPAPUD.bit.GPIO1  = 1;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO0 = 1;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO1 = 1;
+    //TZ1 GPIO12 設定
+    GpioCtrlRegs.GPAPUD.bit.GPIO12   = 0;
+    GpioCtrlRegs.GPAQSEL1.bit.GPIO12 = 0;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO12  = 0;
+    //看中斷取樣速度
+    GpioCtrlRegs.GPAMUX2.bit.GPIO19   = 0;
+    GpioCtrlRegs.GPADIR.bit.GPIO19    = 1;
+
+    //TB設定
+    EPwm1Regs.TBPRD               = 450;
+    EPwm1Regs.TBPHS.half.TBPHS    = 0;
+    EPwm1Regs.TBCTR               = 0;
+    EPwm1Regs.TBCTL.bit.CTRMODE   = 2;    //Up-down-count mode
+    EPwm1Regs.TBCTL.bit.PHSEN     = 0;    //master:0 Slave:1 module
+    EPwm1Regs.TBCTL.bit.PRDLD     = 0;
+    EPwm1Regs.TBCTL.bit.SYNCOSEL  = 0;    //Synchronization Output Select.
+    EPwm1Regs.TBCTL.bit.SWFSYNC   = 0;
+    EPwm1Regs.TBCTL.bit.HSPCLKDIV = 0;
+    EPwm1Regs.TBCTL.bit.CLKDIV    = 0;
+    EPwm1Regs.TBCTL.bit.PHSDIR    = 0;
+    //CC設定
+    EPwm1Regs.CMPA.half.CMPA       = 225;
+    EPwm1Regs.CMPB                 = 225;
+    EPwm1Regs.CMPCTL.bit.SHDWAMODE = 0;
+    EPwm1Regs.CMPCTL.bit.SHDWBMODE = 0;
+    EPwm1Regs.CMPCTL.bit.LOADAMODE = 0;
+    EPwm1Regs.CMPCTL.bit.LOADBMODE = 0;
+    //AQ設定
+    EPwm1Regs.AQCTLA.bit.CAU = 1;
+    EPwm1Regs.AQCTLA.bit.CAD = 2;
+    EPwm1Regs.AQCTLB.bit.CAU = 1;
+    EPwm1Regs.AQCTLB.bit.CAD = 2;
+    //DB設定
+    EPwm1Regs.DBCTL.bit.HALFCYCLE = 1;
+    EPwm1Regs.DBCTL.bit.OUT_MODE = 3;
+    EPwm1Regs.DBCTL.bit.POLSEL   = 2;
+    EPwm1Regs.DBCTL.bit.IN_MODE  = 2;
+    EPwm1Regs.DBFED              = 100;  //1 clock:5.5ns
+    EPwm1Regs.DBRED              = 100;
+    //ET設定
+    EPwm1Regs.ETSEL.bit.INTSEL = 1;
+    EPwm1Regs.ETSEL.bit.INTEN  = 1;     //開PWM中斷
+    EPwm1Regs.ETPS.bit.INTPRD  = 1;
+    EPwm1Regs.ETCLR.bit.INT    = 1;
+    //TZ設定
+    EPwm1Regs.TZSEL.all       = 0;
+    EPwm1Regs.TZSEL.bit.CBC1  = 0;
+    EPwm1Regs.TZCTL.bit.TZA   = 2;           //輸出為low
+    EPwm1Regs.TZCTL.bit.TZB   = 2;           //輸出為low
+    EPwm1Regs.TZCLR.bit.CBC   = 1;
+    EPwm1Regs.TZCLR.bit.INT   = 1;
+    //啟用HRPWM
+//    EPwm1Regs.HRCNFG.all          = 0;
+//    EPwm1Regs.HRCNFG.bit.EDGMODE  = 3;      // Both Edge
+//    EPwm1Regs.HRCNFG.bit.CTLMODE  = 0;      // CMPAHR 控制
+//    EPwm1Regs.HRCNFG.bit.HRLOAD   = 0;      // Zero 時更新
+//    EPwm1Regs.HRCNFG.bit.AUTOCONV = 1;      // 啟用自動轉換
+//    EPwm1Regs.HRPCTL.bit.HRPE     = 1;      // HRPWM Enable
+    EDIS;
+}
+
+void EPWM_S7S8(void)
+{
+    EALLOW;
+    GpioCtrlRegs.GPAPUD.bit.GPIO2 = 1;
+    GpioCtrlRegs.GPAPUD.bit.GPIO3 = 1;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO2 = 1;
+    GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 1;
+
+    //TB設定
+    EPwm2Regs.TBPRD               = 450;
+    EPwm2Regs.TBPHS.half.TBPHS    = 0;   //向位
+    EPwm2Regs.TBCTR               = 0;
+    EPwm2Regs.TBCTL.bit.CTRMODE   = 2;   //Up-down-count mode
+    EPwm2Regs.TBCTL.bit.PHSEN     = 1;
+    EPwm2Regs.TBCTL.bit.PRDLD     = 0;
+    EPwm2Regs.TBCTL.bit.SYNCOSEL  = 0;   //Synchronization Output Select.
+    EPwm2Regs.TBCTL.bit.SWFSYNC   = 0;
+    EPwm2Regs.TBCTL.bit.HSPCLKDIV = 0;
+    EPwm2Regs.TBCTL.bit.CLKDIV    = 0;
+    EPwm2Regs.TBCTL.bit.PHSDIR    = 0;   //Count down:0 up:1
+    //CC設定
+    EPwm2Regs.CMPA.half.CMPA       = 225;
+    EPwm2Regs.CMPB                 = 225;
+    EPwm2Regs.CMPCTL.bit.SHDWAMODE = 0;
+    EPwm2Regs.CMPCTL.bit.SHDWBMODE = 0;
+    EPwm2Regs.CMPCTL.bit.LOADAMODE = 0;
+    EPwm2Regs.CMPCTL.bit.LOADBMODE = 0;
+    //AQ設定
+    EPwm2Regs.AQCTLA.bit.CAU = 1;
+    EPwm2Regs.AQCTLA.bit.CAD = 2;
+    EPwm2Regs.AQCTLB.bit.CAU = 1;
+    EPwm2Regs.AQCTLB.bit.CAD = 2;
+    //DB設定
+    EPwm2Regs.DBCTL.bit.HALFCYCLE = 1;
+    EPwm2Regs.DBCTL.bit.OUT_MODE = 3;
+    EPwm2Regs.DBCTL.bit.POLSEL   = 2;
+    EPwm2Regs.DBCTL.bit.IN_MODE  = 2;
+    EPwm2Regs.DBFED              = 100;
+    EPwm2Regs.DBRED              = 100;
+    //ET設定
+    EPwm2Regs.ETSEL.bit.INTSEL = 1;
+    EPwm2Regs.ETSEL.bit.INTEN  = 1;
+    EPwm2Regs.ETPS.bit.INTPRD  = 1;
+    EPwm2Regs.ETCLR.bit.INT    = 1;
+    //TZ設定
+    EPwm2Regs.TZSEL.all      = 0;
+    EPwm2Regs.TZSEL.bit.CBC1 = 0;
+    EPwm2Regs.TZCTL.bit.TZA  = 2;           //輸出為low
+    EPwm2Regs.TZCTL.bit.TZB  = 2;           //輸出為low
+    EPwm2Regs.TZCLR.bit.CBC  = 1;
+    EPwm2Regs.TZCLR.bit.INT  = 1;
+
+    //啟用HRPWM
+//    EPwm2Regs.HRCNFG.all          = 0;
+//    EPwm2Regs.HRCNFG.bit.EDGMODE  = 3;
+//    EPwm2Regs.HRCNFG.bit.CTLMODE  = HR_CMP;
+//    EPwm2Regs.HRCNFG.bit.HRLOAD   = HR_CTR_ZERO;
+//    EPwm2Regs.HRCNFG.bit.AUTOCONV = 1;
+//    EPwm2Regs.HRPCTL.bit.HRPE     = 1;
+    EDIS;
+}

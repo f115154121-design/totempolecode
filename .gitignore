@@ -1,0 +1,20 @@
+# CCS build outputs
+Debug/
+Release/
+*.obj
+*.d
+*.map
+*.out
+
+# CCS workspace/IDE metadata (machine-specific)
+.metadata/
+.settings/
+*.launch
+
+# CCS embedded browser profile (cookies/history/login data - not source code)
+.jxbrowser.userdata/
+RemoteSystemsTempFiles/
+
+# OS junk
+Thumbs.db
+desktop.ini

@@ -1,0 +1,294 @@
+#include "DSP28x_Project.h"
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+
+extern Uint16 RamfuncsLoadStart;
+extern Uint16 RamfuncsLoadSize;
+extern Uint16 RamfuncsLoadEnd;
+extern Uint16 RamfuncsRunStart;
+
+//==================================================================
+
+
+void InitEPwmTimer(void);
+void PLL(void);
+void ZeroCrossDetect(void);
+void ZeroCrossDeadWindow(void);
+
+__interrupt void adc_isr(void);
+
+//==================================================================
+// PLL state
+//==================================================================
+int state = 0;
+
+#define kp 2.5
+#define ki 0.5
+
+int Vin = 0;
+float Vin_real = 0;
+
+float a = 0, b = 0, b1 = 0, d = 0, q = 0, d1 = 0, q1 = 0, dt = 0.00005,
+      prevoutput = 0, prevoutput1 = 0, z = 0.001568,
+      error = 0, error_1 = 0, integral = 0, integral1 = 0, w = 0, w1 = 0,
+      c5a = 0, c5b = 0, s5a = 0, s5b = 0, cfa = 0, cfb = 0, sfa = 0, sfb = 0,
+      c5d = 0, c5q = 0, s5d = 0, s5q = 0, cfd = 0, cfq = 0, sfd = 0, sfq = 0,
+      cos_value = 0, sin_value = 0;
+float Vref = 100;
+//----- zero-cross (edge-detected) -----------------------------------
+float theta_prev = 0;
+int   zero_cross_pos = 0, zero_cross_neg = 0;
+int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
+
+//----- zero-cross dead-window (lock, glitch-guarded) -----------------
+float phase_prev_dw = 0;
+int   deadWindowActive = 0;
+
+//----- test-only PWM envelope ----------------------------------------
+float test_duty = 0;
+
+//==================================================================
+// main — bring-up only, no protection/control loops.
+//==================================================================
+int main(void)
+{
+    InitSysCtrl();
+
+    DINT;
+    InitPieCtrl();
+    IER = 0x0000;
+    IFR = 0x0000;
+    InitPieVectTable();
+
+    EALLOW;
+    PieVectTable.ADCINT1 = &adc_isr;
+    PieVectTable.TINT1 = &cpu_timer1_isr;
+    EDIS;
+
+//    IER |= M_INT1;
+//    IER |= M_INT13;
+}
+
+//==================================================================
+void InitEPwmTimer()
+{
+    EALLOW;
+    SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 0;
+    EDIS;
+    InitEPwm1Gpio();
+
+    // EPWM1: timebase master + ADC trigger + totem-pole leg A
+    EPwm1Regs.ETSEL.bit.SOCAEN = 1;
+    EPwm1Regs.ETSEL.bit.SOCASEL = ET_CTR_ZERO;
+    EPwm1Regs.ETPS.bit.SOCAPRD = ET_1ST;
+
+    EPwm1Regs.TBCTL.bit.CTRMODE = TB_COUNT_UPDOWN;
+    EPwm1Regs.TBPRD = 2250;
+    EPwm1Regs.TBPHS.half.TBPHS = 0x0000;
+    EPwm1Regs.TBCTL.bit.PHSEN = TB_DISABLE;
+    EPwm1Regs.TBCTL.bit.PRDLD = TB_SHADOW;
+    EPwm1Regs.TBCTL.bit.SYNCOSEL = TB_CTR_ZERO;
+    EPwm1Regs.TBCTR = 0x0000;
+    EPwm1Regs.TBCTL.bit.HSPCLKDIV = TB_DIV1;
+    EPwm1Regs.TBCTL.bit.CLKDIV = TB_DIV1;
+    EPwm1Regs.CMPCTL.bit.SHDWAMODE = CC_SHADOW;
+    EPwm1Regs.CMPCTL.bit.SHDWBMODE = CC_SHADOW;
+    EPwm1Regs.CMPCTL.bit.LOADAMODE = CC_CTR_ZERO;
+    EPwm1Regs.CMPCTL.bit.LOADBMODE = CC_CTR_ZERO;
+    EPwm1Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
+    EPwm1Regs.DBCTL.bit.POLSEL = DB_ACTV_HIC;
+    EPwm1Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
+    EPwm1Regs.DBRED = 50;
+    EPwm1Regs.DBFED = 50;
+    EPwm1Regs.AQCTLA.bit.ZRO = AQ_CLEAR;   // matches CAU intent if CMPA==0 coincides with ZRO
+    EPwm1Regs.AQCTLA.bit.PRD = AQ_SET;     // matches CAD intent if CMPA==TBPRD coincides with PRD
+    EPwm1Regs.AQCTLA.bit.CAU = AQ_CLEAR;
+    EPwm1Regs.AQCTLA.bit.CAD = AQ_SET;     // was AQ_CLEAR — with no SET action anywhere, EPWM1A/B could never go high at all
+    EPwm1Regs.AQCTLB.bit.ZRO = AQ_CLEAR;
+    EPwm1Regs.AQCTLB.bit.PRD = AQ_SET;
+    EPwm1Regs.AQCTLB.bit.CBU = AQ_CLEAR;
+    EPwm1Regs.AQCTLB.bit.CBD = AQ_SET;     // was AQ_CLEAR — same fix for the B output
+
+    // EPWM2: totem-pole leg B, slaved to EPWM1
+    InitEPwm2Gpio();
+    EPwm2Regs.TBCTL.bit.CTRMODE = TB_COUNT_UPDOWN;
+    EPwm2Regs.TBPRD = 4500;
+    EPwm2Regs.TBCTL.bit.PHSEN = TB_ENABLE;
+    EPwm2Regs.TBPHS.half.TBPHS = 0;
+    EPwm2Regs.TBCTR = 0x0000;
+    EPwm2Regs.TBCTL.bit.HSPCLKDIV = TB_DIV1;
+    EPwm2Regs.TBCTL.bit.CLKDIV = TB_DIV1;
+    EPwm2Regs.TBCTL.bit.SYNCOSEL = TB_SYNC_IN;
+    EPwm2Regs.CMPCTL.bit.SHDWAMODE = CC_SHADOW;
+    EPwm2Regs.CMPCTL.bit.SHDWBMODE = CC_SHADOW;
+    EPwm2Regs.CMPCTL.bit.LOADAMODE = CC_CTR_ZERO;
+    EPwm2Regs.CMPCTL.bit.LOADBMODE = CC_CTR_ZERO;
+    EPwm2Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
+    EPwm2Regs.DBCTL.bit.POLSEL = DB_ACTV_HI;
+    EPwm2Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
+    EPwm2Regs.AQCTLA.bit.CAD = AQ_SET;
+    EPwm2Regs.AQCTLA.bit.CAU = AQ_CLEAR;
+    EPwm2Regs.AQCTLB.bit.CBD = AQ_SET;
+    EPwm2Regs.AQCTLB.bit.CBU = AQ_CLEAR;
+
+    InitEPwm3Gpio();
+    EPwm3Regs.TBCTL.bit.CTRMODE = TB_COUNT_UPDOWN;
+    EPwm3Regs.TBPRD = 4500;
+    EPwm3Regs.TBCTL.bit.PHSEN = TB_ENABLE;
+    EPwm3Regs.TBPHS.half.TBPHS = 0;
+    EPwm3Regs.TBCTR = 0x0000;
+    EPwm3Regs.TBCTL.bit.HSPCLKDIV = TB_DIV1;
+    EPwm3Regs.TBCTL.bit.CLKDIV = TB_DIV1;
+    EPwm3Regs.TBCTL.bit.SYNCOSEL = TB_SYNC_IN;
+    EPwm3Regs.CMPCTL.bit.SHDWAMODE = CC_SHADOW;
+    EPwm3Regs.CMPCTL.bit.SHDWBMODE = CC_SHADOW;
+    EPwm3Regs.CMPCTL.bit.LOADAMODE = CC_CTR_ZERO;
+    EPwm3Regs.CMPCTL.bit.LOADBMODE = CC_CTR_ZERO;
+    EPwm3Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
+    EPwm3Regs.DBCTL.bit.POLSEL = DB_ACTV_HI;
+    EPwm3Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
+    EPwm3Regs.AQCTLA.bit.CAD = AQ_SET;
+    EPwm3Regs.AQCTLA.bit.CAU = AQ_CLEAR;
+    EPwm3Regs.AQCTLB.bit.CBD = AQ_SET;
+    EPwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
+
+    EALLOW;
+    SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
+    EDIS;
+}
+
+__interrupt void adc_isr(void)
+{
+    Vin      = AdcResult.ADCRESULT0 - 1558;
+    Vin_real = Vin * 0.231343f;
+    b        = Vin_real;
+
+    PLL();
+    ZeroCrossDetect();
+    ZeroCrossDeadWindow();
+
+    if(zero_cross_event)
+    {
+        GpioDataRegs.GPATOGGLE.bit.GPIO27 = 1;   // scope trigger reference
+    }
+
+
+    test_duty = 1 - (Vref/b1);
+
+    if(deadWindowActive)
+    {
+        EPwm1Regs.CMPA.half.CMPA = 2250;
+        EPwm1Regs.CMPB = 0;
+        EPwm2Regs.CMPA.half.CMPA = 0;
+        EPwm2Regs.CMPB = 0;
+    }
+    else if(integral1 < 1.55f || integral1 > 4.72f)
+    {
+        EPwm1Regs.CMPA.half.CMPA = test_duty * 2250;
+        EPwm1Regs.CMPB = test_duty * 2250;
+        EPwm2Regs.CMPA.half.CMPA = 0;
+        EPwm2Regs.CMPB = 4500;
+    }
+    else if(integral1 > 1.58f && integral1 < 4.69f)
+    {
+        EPwm1Regs.CMPA.half.CMPA = (1 - test_duty) * 2250;
+        EPwm1Regs.CMPB = (1 - test_duty) * 2250;
+        EPwm2Regs.CMPA.half.CMPA = 4500;
+        EPwm2Regs.CMPB = 0;
+    }
+
+    AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
+}
+
+//==================================================================
+void PLL(void)
+{
+    cos_value = cos(integral1);
+    sin_value = sin(integral1);
+    cfd = cfa = cfq = cfb = cos_value;
+    sfd = sfa = sfq = sfb = sin_value;
+
+    switch(state)
+    {
+        case 0:
+            if(integral1 > 0)
+            {
+                state = 1;
+            }
+            d = (c5a * a + s5b * b);
+            q = ((-s5a * a) + c5b * b);
+            a = (c5d * d1 + (-s5q * q1));
+            b1 = (s5d * d1 + c5q * q1);
+            break;
+        case 1:
+            d = (cfa * a + sfb * b);
+            q = ((-sfa * a) + cfb * b);
+            a = (cfd * d1 + (-sfq * q1));
+            b1 = (sfd * d1 + cfq * q1);
+            state = 1;
+            break;
+    }
+
+    error_1 = error;
+    error = -d;
+    integral = integral + error * ki * dt;
+    w = (error * kp) + integral + 376.991;
+
+    w1 = w;
+    integral1 = fmod(integral1 + w * dt, 6.28);
+
+    d1 = z * d + (1 - z) * prevoutput;
+    prevoutput = d1;
+    q1 = z * q + (1 - z) * prevoutput1;
+    prevoutput1 = q1;
+}
+
+//==================================================================
+// ZeroCrossDetect — edge-only (fires once per crossing), used for
+// the scope-trigger toggle above.
+//==================================================================
+void ZeroCrossDetect(void)
+{
+    zero_cross_pos = (theta_prev < 1.55f && integral1 >= 1.55f);
+    zero_cross_neg = (theta_prev < 4.69f && integral1 >= 4.69f);
+
+    zc_now = (zero_cross_pos || zero_cross_neg);
+    zero_cross_event = (zc_now && !zc_prev);
+    zc_prev = zc_now;
+
+    theta_prev = integral1;
+}
+
+//==================================================================
+// ZeroCrossDeadWindow — latched dead-window state, ignores any
+// sample where integral1 goes backward (other than the legitimate
+// 2*pi wrap), so a glitchy PLL sample right at the window boundary
+// can't flap the PWM in and out of the dead window.
+//==================================================================
+void ZeroCrossDeadWindow(void)
+{
+    int wrapped        = (integral1 < phase_prev_dw - 3.0f);
+    int phase_reversed = (!wrapped && integral1 < phase_prev_dw);
+
+    if(!phase_reversed)
+    {
+        if(!deadWindowActive)
+        {
+            if((integral1 > 1.55f && integral1 < 1.58f) || (integral1 > 4.69f && integral1 < 4.72f))
+            {
+                deadWindowActive = 1;
+            }
+        }
+        else
+        {
+            if(!((integral1 > 1.55f && integral1 < 1.58f) || (integral1 > 4.69f && integral1 < 4.72f)))
+            {
+                deadWindowActive = 0;
+            }
+        }
+    }
+
+    phase_prev_dw = integral1;
+}
