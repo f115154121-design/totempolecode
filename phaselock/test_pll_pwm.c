@@ -119,8 +119,6 @@ int main(void)
     GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 01;  GpioCtrlRegs.GPADIR.bit.GPIO3 = 1;
     GpioCtrlRegs.GPAMUX1.bit.GPIO4 = 01;  GpioCtrlRegs.GPADIR.bit.GPIO4 = 1;
     GpioCtrlRegs.GPAMUX1.bit.GPIO5 = 01;  GpioCtrlRegs.GPADIR.bit.GPIO5 = 1;
-    GpioCtrlRegs.GPAMUX1.bit.GPIO6 = 01;  GpioCtrlRegs.GPADIR.bit.GPIO6 = 1;
-    GpioCtrlRegs.GPAMUX1.bit.GPIO7 = 01;  GpioCtrlRegs.GPADIR.bit.GPIO7 = 1;
     EDIS;
 
     //--------------------------------------------------------------
@@ -222,14 +220,14 @@ void InitEPwmTimer(void)
     EPwm2Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
     EPwm2Regs.DBRED = 2000;
     EPwm2Regs.DBFED = 2000;
-    EPwm2Regs.AQCTLA.bit.ZRO = AQ_SET;   // ZRO+CAU, not CAU+CAD 嚙踝蕭 see main.c for why (sync/TBPRD coincidence)
+    EPwm2Regs.AQCTLA.bit.ZRO = AQ_SET;   
     EPwm2Regs.AQCTLA.bit.CAU = AQ_CLEAR;
     EPwm2Regs.AQCTLB.bit.ZRO = AQ_CLEAR;
     EPwm2Regs.AQCTLB.bit.CBU = AQ_SET;
 
     InitEPwm3Gpio();
     EPwm3Regs.TBCTL.bit.CTRMODE = TB_COUNT_UPDOWN;
-    EPwm3Regs.TBPRD = 4500;   // was 539 (~167kHz) — now 90MHz/4500 = 20kHz, matching EPwm1
+    EPwm3Regs.TBPRD = 2250;   // was 539 (~167kHz) — now 90MHz/4500 = 20kHz, matching EPwm1
     EPwm3Regs.TBCTL.bit.PHSEN = TB_ENABLE;
     EPwm3Regs.TBPHS.half.TBPHS = 0;
     EPwm3Regs.TBCTR = 0x0000;
@@ -249,6 +247,7 @@ void InitEPwmTimer(void)
     EPwm3Regs.AQCTLA.bit.CAD = AQ_SET;
     EPwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
     EPwm3Regs.AQCTLB.bit.CBD = AQ_SET;
+
     EALLOW;
     SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
     EDIS;
@@ -304,16 +303,16 @@ __interrupt void adc_isr(void)
                 {
                     test_duty = 0;
                 }
-            EPwm3Regs.CMPA.half.CMPA = 2000;   // matches TBPRD=4500 and the Vbus_duty=0 convention used elsewhere
-            EPwm3Regs.CMPB = 2000;
-            if(b1 > 10)
+            EPwm3Regs.CMPA.half.CMPA = 500;   // matches TBPRD=4500 and the Vbus_duty=0 convention used elsewhere
+            EPwm3Regs.CMPB = 500;
+            if(b1 > 2)
             {
                 EPwm1Regs.CMPA.half.CMPA = test_duty * 2250;
                 EPwm1Regs.CMPB = test_duty * 2250;
                 EPwm2Regs.CMPA.half.CMPA = 4500;
                 EPwm2Regs.CMPB = 0;
             }
-            else if(b1 < -10)
+            else if(b1 < -2)
             {
                 EPwm1Regs.CMPA.half.CMPA = (1 - test_duty) * 2250;
                 EPwm1Regs.CMPB = (1 - test_duty) * 2250;
@@ -351,7 +350,7 @@ void Hold(void)
     EPwm2Regs.CMPA.half.CMPA = 0;      // defined static level �� verify on scope this is the state you want;
     EPwm2Regs.CMPB = 0;                // retune if EPwm2's HIC polarity means this isn't the "safe" combo
     EPwm3Regs.CMPA.half.CMPA = 0;   // matches TBPRD=4500 and the Vbus_duty=0 convention used elsewhere
-    EPwm3Regs.CMPB = 4500;
+    EPwm3Regs.CMPB = 2250;
 }
 
 void debun(void)

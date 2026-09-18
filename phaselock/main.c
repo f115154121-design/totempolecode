@@ -43,20 +43,42 @@ volatile float k[N], k1[N], v4[N], tri[N], vn[N];
 int startupFLAG = 0;         // set once the post-power-up settle delay below has elapsed
 int system_running = 0, starset_up = 0, switch_state = 0, count = 0;
 
-
-#define STARTUP_DELAY_CYCLES 1000 //防彈跳
+//----- power-up settle delay ----------------------------------------
+// ADC / analog front-end can read stale or transient values for a short time after
+// power-up, which could otherwise trip protect() immediately. Hold everything in a
+// safe state for STARTUP_DELAY_CYCLES ADC-ISR cycles (~50ms @ 20kHz, per PLL()'s
+// dt=0.00005) before allowing protection or switching to engage. This window also
+// gives the PLL time to converge before duty commands are trusted.
+#define STARTUP_DELAY_CYCLES 1000
 int startupDelayCount = 0;
 
 //----- PLL lock confirmation (counter-based, mirrors CheckPLLLock() pattern) -----
 int PLL_flag = 0;
 int PLLcount = 0, PLLERRcount = 0;
 
-
-#define BUS_SETTLE_CYCLES 40000 //開關開啟後buck延遲時間
+//----- bus settle gate: Buck stays fully off (and Vout_ref won't start ramping) until
+//----- the PFC bus has held PLL_flag && Vbus_real>=60 continuously for BUS_SETTLE_CYCLES.
+//----- Sim converges in 3-4 line cycles; 1s @ 20kHz is a generous margin over that.
+#define BUS_SETTLE_CYCLES 20000
 int busSettleCount = 0;
 int bus_ready = 0;
 
-//----- Buck soft-start ramp state (see VOUT_REF_START/FINAL/BUCK_RAMP_CYCLES above) -----
+//----- latches the first time the main switch turns on. The 10% pre-bias is only meant for
+//----- the initial bring-up, so once the switch has been on, turning it off has to shut the
+//----- Buck down rather than fall back to preload (switch_state==0 alone can't tell the two apart).
+int main_switch_seen = 0;
+
+//----- Buck soft-start ramp (shared Vout_ref target for VoltageLoop() and Busloop()) -----
+// Once the main switch (SW1 -> switch_state) turns on, Vout_ref ramps from VOUT_REF_START
+// to VOUT_REF_FINAL over BUCK_RAMP_CYCLES ADC-ISR cycles (~2s @ 20kHz, per PLL()'s dt=0.00005).
+// Both the PFC outer voltage loop and the Buck feedforward read this SAME variable so they
+// always target the same setpoint — if they used different/unsynced targets, the PFC's Ipre
+// and the Buck's duty would be aiming at different output levels during the ramp.
+#define VOUT_REF_START   10.0f
+#define VOUT_REF_FINAL   100.0f
+#define BUCK_RAMP_CYCLES 40000
+
+//----- Buck soft-start ramp state -----
 float Vout_ref = VOUT_REF_START;
 int   buck_ramp_count = 0;
 
@@ -73,13 +95,12 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 //==================================================================
 // PLL / control constants
 //==================================================================
+#define kp 2.5
+#define ki 0.5
 #define Iki  0.000001
 #define Vkp 0.1
 #define Vki 0.01
 #define Vbkp 0.001
-#define VOUT_REF_START   10.0f
-#define VOUT_REF_FINAL   500.0f
-#define BUCK_RAMP_CYCLES 40000  
 
 //----- current-loop Kp design -----------------------------------------
 // Ikp = 2*pi*fc*L / Vbus — sets the current loop's proportional-gain crossover
@@ -88,6 +109,19 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 // the constant separately.
 #define CURRENT_LOOP_L_HENRY  0.0015608f   // measured input inductor (was ~4.71/Vbus derived from an earlier L)
 #define CURRENT_LOOP_FC_HZ    1800.0f      // desired current-loop crossover frequency
+
+//----- slow-leg (EPwm2) commutation dead window -----------------------
+// Both slow-leg arms are held off while |b1| is under this threshold. The window has to
+// outlast several ISR cycles or the 20kHz sampling steps straight over it and the leg
+// commutates with zero dead time — EPwm2's dead-band module adds none of its own (its
+// RED/FED delays cancel out in both commutation directions), so this window is the leg's
+// only interlock. Half-width in time = SLOW_LEG_DEAD_V / (b1 peak * 377), i.e. ~86us at a
+// 155V peak, about 3.4 ISR cycles. Re-derive if the line voltage or the ISR rate changes.
+#define SLOW_LEG_DEAD_V  3.0f
+
+//----- AQCSFRC.CSFx software-force levels (TI's headers define no constants for these) -----
+#define AQ_SW_LOW   1     // force a continuous low on that output
+#define AQ_SW_HIGH  2     // force a continuous high on that output
 
 int PF = 0, PF_1 = 0, Vin = 0, Iin = 0, Vbus = 0, Iout = 0, Vout = 0;
 int delay_count = 0, zero_cross = 0; // 'zero_cross' kept only for legacy reference; use zero_cross_event/pos/neg instead
@@ -263,6 +297,8 @@ void InitEPwmTimer()
                                             // IN_MODE/POLSEL below this forced both switches on this leg permanently HIGH (shoot-through).
     EPwm1Regs.AQCTLB.bit.CBU = AQ_CLEAR;
     EPwm1Regs.AQCTLB.bit.CBD = AQ_SET;     // kept in sync with AQCTLA; unused while IN_MODE=DBA_RED_DBB_FED (B is derived from A).
+    EPwm1Regs.CMPA.half.CMPA = 0;          // both arms off before the first ISR — the reset value 0/0 leaves EPWM1B 100% on
+    EPwm1Regs.CMPB = 2250;
 
     //----------------------------------------------------------------
     // EPWM2 = totem-pole PFC leg B — this is the role your old EPWM3 had.
@@ -284,19 +320,22 @@ void InitEPwmTimer()
     EPwm2Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
     EPwm2Regs.DBCTL.bit.POLSEL = DB_ACTV_HI;
     EPwm2Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
-    EPwm2Regs.DBRED = 2000;  // bench-validated: this leg only holds a level for a whole half-line-cycle, so
-    EPwm2Regs.DBFED = 2000;  // a dead time this large (~22.2us @ 90MHz) exceeds the transition's natural pulse
-                              // width — the delayed "turn on" edge gets pre-empted by the next immediate
-                              // "turn off" edge before it ever fires, so both A/B stay low through the
-                              // transition instead of just a normal-sized gap. Confirmed on the scope.
-    EPwm2Regs.AQCTLA.bit.ZRO = AQ_SET;   // ZRO+CAU, not CAU+CAD — see main.c for why (sync/TBPRD coincidence)
+    EPwm2Regs.DBRED = 2000;
+    EPwm2Regs.DBFED = 2000;
+    // Line-frequency leg: commutated by the AQCSFRC software force below, not by CMPA/CMPB.
+    // CMPA=0 could not express "off" here — ZRO=SET outranks CAU=CLEAR, so it held A high.
+    // The AQCTL actions below never take effect while a continuous force is active.
+    EPwm2Regs.AQCTLA.bit.ZRO = AQ_SET;
     EPwm2Regs.AQCTLA.bit.CAU = AQ_CLEAR;
     EPwm2Regs.AQCTLB.bit.ZRO = AQ_CLEAR;
     EPwm2Regs.AQCTLB.bit.CBU = AQ_SET;
+    EPwm2Regs.AQSFRC.bit.RLDCSF = 0;           // reload AQCSFRC at CTR=0, same boundary as the CMP shadows
+    EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;    // both arms off until the ISR commutates the leg
+    EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
 
     InitEPwm3Gpio();
     EPwm3Regs.TBCTL.bit.CTRMODE = TB_COUNT_UPDOWN;
-    EPwm3Regs.TBPRD = 4500;   // was 539 (~167kHz) — now 90MHz/4500 = 20kHz, matching EPwm1
+    EPwm3Regs.TBPRD = 2250;   // was 539 (~167kHz) — now 90MHz/4500 = 20kHz, matching EPwm1
     EPwm3Regs.TBCTL.bit.PHSEN = TB_ENABLE;
     EPwm3Regs.TBPHS.half.TBPHS = 0;
     EPwm3Regs.TBCTR = 0x0000;
@@ -315,8 +354,22 @@ void InitEPwmTimer()
     EPwm3Regs.AQCTLA.bit.CAU = AQ_CLEAR;
     EPwm3Regs.AQCTLA.bit.CAD = AQ_SET;     
     EPwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
-    EPwm3Regs.AQCTLB.bit.CBD = AQ_SET;    
+    EPwm3Regs.AQCTLB.bit.CBD = AQ_SET;
+    EPwm3Regs.CMPA.half.CMPA = 0;   // both arms off until Busloop() takes over — the reset value 0/0 is D=1, i.e. high-side 100% on
+    EPwm3Regs.CMPB = 2250;
+
+    //----------------------------------------------------------------
+    // Trip zone. TZCTL was never configured, so turnoff()'s TZFRC.OST had no defined effect on
+    // the pins. OST is a one-shot latch and nothing in this file ever writes TZCLR, so a trip
+    // holds both gates low until the device is reset or reprogrammed.
+    //----------------------------------------------------------------
     EALLOW;
+    EPwm1Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm1Regs.TZCTL.bit.TZB = TZ_FORCE_LO;
+    EPwm2Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm2Regs.TZCTL.bit.TZB = TZ_FORCE_LO;
+    EPwm3Regs.TZCTL.bit.TZA = TZ_FORCE_LO;
+    EPwm3Regs.TZCTL.bit.TZB = TZ_FORCE_LO;
     SysCtrlRegs.PCLKCR0.bit.TBCLKSYNC = 1;
     EDIS;
 }
@@ -377,16 +430,9 @@ __interrupt void adc_isr(void)
     {
         zero_cross = zero_cross_event; // kept for any legacy reads elsewhere
 
-        UpdateVref();          // shared by currentloop() and Busloop() — must run before both
-        UpdateBusReady();      // must run before UpdateVoutRefRamp()/Busloop() — both read bus_ready
-        UpdateVoutRefRamp();   // soft-starts the shared Vout_ref target once switch_state==1 && bus_ready
-        Busloop();
-
-        EPwm3Regs.CMPA.half.CMPA = (1 - Vbus_duty) * 4500;
-        EPwm3Regs.CMPB = (1 - Vbus_duty) * 4500;
-
         //--------------------------------------------------------------
-        // PFC: unchanged — still gated purely by switch_state && PLL_flag.
+        // PFC run/stop. Runs before Busloop() so the Buck reads this cycle's system_running —
+        // that's what makes both stages stop on the same zero crossing.
         //--------------------------------------------------------------
         if(switch_state == 1 && PLL_flag)   // added PLL_flag — don't start switching until the PLL is confirmed locked
         {
@@ -395,6 +441,26 @@ __interrupt void adc_isr(void)
         else if(zero_cross_event)
         {
             system_running = 0;
+        }
+
+        UpdateVref();          // shared by currentloop() and Busloop() — must run before both
+        UpdateBusReady();      // must run before UpdateVoutRefRamp()/Busloop() — both read bus_ready
+        UpdateVoutRefRamp();   // soft-starts the shared Vout_ref target once system_running && bus_ready
+        Busloop();
+
+        //--------------------------------------------------------------
+        // Buck runs off Vbus_duty every cycle, independently of switch_state — that's what
+        // gives the ">60V bus, 10% preload before the main switch" behaviour.
+        //--------------------------------------------------------------
+        if(Vbus_duty <= 0)
+        {
+            EPwm3Regs.CMPA.half.CMPA = 0;   // real both-off pair; the (1-D) form maps D=0 to low-side 100% on, not off
+            EPwm3Regs.CMPB = 2250;
+        }
+        else
+        {
+            EPwm3Regs.CMPA.half.CMPA = (1 - Vbus_duty) * 2250;
+            EPwm3Regs.CMPB = (1 - Vbus_duty) * 2250;
         }
 
         if(system_running == 1)
@@ -412,28 +478,26 @@ __interrupt void adc_isr(void)
                 if(final_duty > 0.95) final_duty = 0.95;
 
 
-            if(b1 < 1 && b1 > -1)   // was "b1>1 / else b1<1", a complementary pair that covers everything except
-                                     // b1==1.0 exactly — the dead window below never ran, and the negative-half
-                                     // branch was silently absorbing 0<b1<1 that should have been positive-half
+            if(b1 < 5 && b1 > -5)
             {
                 EPwm1Regs.CMPA.half.CMPA = 0;
                 EPwm1Regs.CMPB = 2250;
-                EPwm2Regs.CMPA.half.CMPA = 0;
-                EPwm2Regs.CMPB = 0;
+                EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;    // both slow-leg arms off through the zero crossing
+                EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
             }
             else if(b1 > 0)
             {
                 EPwm1Regs.CMPA.half.CMPA = final_duty * 2250;   // was test_duty — undeclared in main.c (that's
-                EPwm1Regs.CMPB = final_duty * 2250;             // test_pll_pwm.c's stand-in var); using it here
-                EPwm2Regs.CMPA.half.CMPA = 4500;                // wouldn't compile, and would have bypassed
-                EPwm2Regs.CMPB = 0;                             // currentloop()'s duty entirely even if it did
+                EPwm1Regs.CMPB = final_duty * 2250;             // test_pll_pwm.c's stand-in var)
+                EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;
+                EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_HIGH;
             }
             else
             {
                 EPwm1Regs.CMPA.half.CMPA = (1 - final_duty) * 2250;
                 EPwm1Regs.CMPB = (1 - final_duty) * 2250;
-                EPwm2Regs.CMPA.half.CMPA = 0;
-                EPwm2Regs.CMPB = 4500;
+                EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_HIGH;
+                EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
             }
             }
             else
@@ -475,7 +539,13 @@ void ZeroCrossDetect(void)
     theta_prev = integral1;
 }
 
-
+//==================================================================
+// CheckPLLLock — counter-based lock confirmation (mirrors the reference
+// CheckPLLLock() pattern, adapted to this file's own d1/q1/integral1).
+// Thresholds are carried over as a starting point from that reference
+// (same 0.231343 ADC scaling, so amplitudes should be in a similar range)
+// — watch q1/d1 on the bench and retune if they don't match your hardware.
+//==================================================================
 void CheckPLLLock(void)
 {
     if(fabsf(d1) > 1 || integral1 < -0.2 || integral1 > 6.5)
@@ -506,7 +576,7 @@ void CheckPLLLock(void)
         return;
     }
 
-    PLLcount = 0;  
+    PLLcount = 0;   // in-between zone — neither clearly locked nor clearly failed; don't let count creep up here
 }
 
 void currentloop(void)
@@ -583,26 +653,35 @@ void UpdateBusReady(void)
     }
     else
     {
-        busSettleCount = 0;   // drops back out (e.g. PLL lost lock, or Vbus sagged) — start the 1s wait over
+        busSettleCount = 0;
         bus_ready = 0;
     }
 }
 
 void Busloop(void)
 {
-    if(PLL_flag && Vbus_real >= 60)
+    if(switch_state == 1)
     {
-        if(bus_ready && switch_state == 1)
+        main_switch_seen = 1;
+    }
+
+    if(PLL_flag && Vbus_real >= 120)
+    {
+        if(main_switch_seen && !system_running)
         {
-            Vbus_duty = Vout_ref / Vref;   
-            
+            Vbus_duty = 0;
+        }
+        else if(bus_ready && system_running)
+        {
+            Vbus_duty = Vout_ref / Vref;   // open-loop Vo/Vref — uses the (ramping) target Vout_ref, not the
+                                            // live measurement, since VoltageLoop() already regulates Vout_real
             if(Vbus_duty > 0.90) Vbus_duty = 0.90;
             if(Vbus_duty < 0.10) Vbus_duty = 0.10;
         }
         else
         {
-            Vbus_duty = 0.10;   // preload: bus just crossed 60V — hold a small fixed duty here, before the
-                                 // main switch is on and before the 1s settle window has elapsed
+            Vbus_duty = 0.10;   // preload: before the main switch has ever been on, and during the 1s
+                                 // settle window after it — so the ramp above starts from this same 10%
         }
     }
     else
@@ -611,10 +690,17 @@ void Busloop(void)
     }
 }
 
-
+//==================================================================
+// UpdateVoutRefRamp — soft-starts the shared Vout_ref target from VOUT_REF_START up to
+// VOUT_REF_FINAL over BUCK_RAMP_CYCLES cycles, once the PFC is running AND the bus has
+// settled (bus_ready). Resets back to the start value whenever either condition drops,
+// so every fresh start begins a clean ramp rather than resuming mid-ramp. Gated on
+// system_running, not switch_state, so the ramp holds instead of collapsing to
+// VOUT_REF_START during the wind-down window after the switch is turned off.
+//==================================================================
 void UpdateVoutRefRamp(void)
 {
-    if(switch_state == 1 && bus_ready)
+    if(system_running && bus_ready)
     {
         if(buck_ramp_count < BUCK_RAMP_CYCLES)
         {
@@ -639,16 +725,16 @@ void SetSafeOutputsPFC(void)
 {
     EPwm1Regs.CMPA.half.CMPA = 0;   // 0% physical on-time for EPwm1 (POLSEL=HIC convention, same as main.c)
     EPwm1Regs.CMPB = 2250;
-    EPwm2Regs.CMPA.half.CMPA = 0;      // defined static level �� verify on scope this is the state you want;
-    EPwm2Regs.CMPB = 0;                // retune if EPwm2's HIC polarity means this isn't the "safe" combo
+    EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;   // both slow-leg arms off
+    EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
     
 }
 
 void SetSafeOutputs(void)
 {
     SetSafeOutputsPFC();
-    EPwm3Regs.CMPA.half.CMPA = 4500;   // matches TBPRD=4500 and the Vbus_duty=0 convention used elsewhere
-    EPwm3Regs.CMPB = 4500;
+    EPwm3Regs.CMPA.half.CMPA = 0;   // both-off pair: outA = CMPA/TBPRD = 0, outB = 1 - CMPB/TBPRD = 0
+    EPwm3Regs.CMPB = 2250;
 }
 
 
@@ -758,7 +844,7 @@ void VoltageLoop(void)
     {
         if(!triggered)
         {
-            Ve = Vout_ref - Vo_filt;z
+            Ve = Vout_ref - Vo_filt;
             Ipre = Ipre_prev + Vkp * (Ve - Ve_prev) + Vki * 0.01667 * Ve;
             Ve_prev = Ve;
             Ipre_prev = Ipre;
