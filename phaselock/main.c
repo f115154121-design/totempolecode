@@ -20,10 +20,9 @@ void lowpass(void);
 void debun(void);
 
 void UpdateVref(void);        // shared boost-bus reference used by both currentloop() and Busloop()
-void UpdateBusReady(void);    // counts 1s of stable PLL_flag&&Vbus>=60 before Buck is allowed to run
 void UpdateVoutRefRamp(void); // soft-starts the shared Vout_ref target once the main switch is on
-void SetSafeOutputs(void);    // full safe state (PFC + Buck) — used by turnoff() on a real fault trip
-void SetSafeOutputsPFC(void); // PFC-leg-only safe state — used by Hold(), leaves Buck's own output alone
+void SetSafeOutputs(void);    // full safe state (PFC + Buck) - used by turnoff() on a real fault trip
+void SetSafeOutputsPFC(void); // PFC-leg-only safe state - used by Hold(), leaves Buck's own output alone
 void turnoff(void);          // hardware trip (protection event)
 void Hold(void);             // normal idle reset (not a fault)
 void protect(void);          // latched fault supervisor
@@ -35,13 +34,17 @@ __interrupt void adc_isr(void);
 //==================================================================
 // State / sequencing
 //==================================================================
-int state = 0, state1 = 0;
-int v_index = 0;
-#define N 500
-volatile float k[N], k1[N], v4[N], tri[N], vn[N];
+int state = 0;
 
 int startupFLAG = 0;         // set once the post-power-up settle delay below has elapsed
 int system_running = 0, starset_up = 0, switch_state = 0, count = 0;
+
+//----- second switch (GPIO10): lets you manually decide when Buck is allowed to start,
+//----- instead of relying only on the automatic PLL_flag && Vbus_real>=120 check in
+//----- Busloop() - useful on the bench to wait until Vbus_real has visibly settled
+//----- before letting Buck engage, sidestepping any chatter across that 120V threshold
+//----- during the initial bus charge-up transient.
+int buck_switch_state = 0, buck_count = 0;
 
 //----- power-up settle delay ----------------------------------------
 // ADC / analog front-end can read stale or transient values for a short time after
@@ -56,23 +59,11 @@ int startupDelayCount = 0;
 int PLL_flag = 0;
 int PLLcount = 0, PLLERRcount = 0;
 
-//----- bus settle gate: Buck stays fully off (and Vout_ref won't start ramping) until
-//----- the PFC bus has held PLL_flag && Vbus_real>=60 continuously for BUS_SETTLE_CYCLES.
-//----- Sim converges in 3-4 line cycles; 1s @ 20kHz is a generous margin over that.
-#define BUS_SETTLE_CYCLES 20000
-int busSettleCount = 0;
-int bus_ready = 0;
-
-//----- latches the first time the main switch turns on. The 10% pre-bias is only meant for
-//----- the initial bring-up, so once the switch has been on, turning it off has to shut the
-//----- Buck down rather than fall back to preload (switch_state==0 alone can't tell the two apart).
-int main_switch_seen = 0;
-
 //----- Buck soft-start ramp (shared Vout_ref target for VoltageLoop() and Busloop()) -----
 // Once the main switch (SW1 -> switch_state) turns on, Vout_ref ramps from VOUT_REF_START
 // to VOUT_REF_FINAL over BUCK_RAMP_CYCLES ADC-ISR cycles (~2s @ 20kHz, per PLL()'s dt=0.00005).
 // Both the PFC outer voltage loop and the Buck feedforward read this SAME variable so they
-// always target the same setpoint — if they used different/unsynced targets, the PFC's Ipre
+// always target the same setpoint - if they used different/unsynced targets, the PFC's Ipre
 // and the Buck's duty would be aiming at different output levels during the ramp.
 #define VOUT_REF_START   10.0f
 #define VOUT_REF_FINAL   100.0f
@@ -97,13 +88,11 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 //==================================================================
 #define kp 2.5
 #define ki 0.5
-#define Iki  0.000001
 #define Vkp 0.1
 #define Vki 0.01
-#define Vbkp 0.001
 
 //----- current-loop Kp design -----------------------------------------
-// Ikp = 2*pi*fc*L / Vbus — sets the current loop's proportional-gain crossover
+// Ikp = 2*pi*fc*L / Vbus - sets the current loop's proportional-gain crossover
 // at fc, standard design for a boost-type inductor current loop. Retune these
 // two if L is remeasured again or fc needs to change; don't hand-recompute
 // the constant separately.
@@ -113,7 +102,7 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 //----- slow-leg (EPwm2) commutation dead window -----------------------
 // Both slow-leg arms are held off while |b1| is under this threshold. The window has to
 // outlast several ISR cycles or the 20kHz sampling steps straight over it and the leg
-// commutates with zero dead time — EPwm2's dead-band module adds none of its own (its
+// commutates with zero dead time - EPwm2's dead-band module adds none of its own (its
 // RED/FED delays cancel out in both commutation directions), so this window is the leg's
 // only interlock. Half-width in time = SLOW_LEG_DEAD_V / (b1 peak * 377), i.e. ~86us at a
 // 155V peak, about 3.4 ISR cycles. Re-derive if the line voltage or the ISR rate changes.
@@ -123,23 +112,17 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 #define AQ_SW_LOW   1     // force a continuous low on that output
 #define AQ_SW_HIGH  2     // force a continuous high on that output
 
-int PF = 0, PF_1 = 0, Vin = 0, Iin = 0, Vbus = 0, Iout = 0, Vout = 0;
-int delay_count = 0, zero_cross = 0; // 'zero_cross' kept only for legacy reference; use zero_cross_event/pos/neg instead
+int Vin = 0, Iin = 0, Vbus = 0, Iout = 0, Vout = 0;
 
-float a = 0, b = 0, a1 = 0, b1 = 0, y1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0, c5q = 0, c5d = 0, theta = 0,
-      c5a = 0, c5b = 0, s5a = 0, s5b = 0, cfa = 0, cfb = 0, sfa = 0, sfb = 0, d = 0, q = 0, d1 = 0, q1 = 0, fc = 5, dt = 0.00005,
-      prevoutput = 0, prevoutput1 = 0, z = 0.001568, input = 0, input1 = 0, output = 0, output1 = 0, error = 0, error_1 = 0,
-      integral = 0, integral1 = 0, w = 0, w1 = 0, d_filt = 0, q_filt = 0, v_current = 0, Ifb = 0, Iref = 0, pi = 3.14159,
-      tolerance = 0.005, p = 0, Ie = 0, Ie1 = 0, duty = 0, Vac_in = 0, Vin_real = 0, Iin_real = 0, feedforward = 0, Ikp = 0,
-      Iout_real = 0, Vbus_real = 0, Vout_real = 0, feedforward_buck = 0, Ipi = 0, Ipi_1 = 0, iratio = 0,
-      Vo_filt = 0, Vo_prev = 0, Vbus_filt = 0, Vbus_filt_prev = 0, Ve = 0, Vint = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, alpha = 0, Ic = 0, triggered = 0,
-      cos_value = 0, sin_value = 0, Verr = 0, Vbus_duty = 0, Vbuspi = 0, Vout_soft = 5, Ipre_max = 1, duty_soft = 0.7,
+float a = 0, b = 0, b1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0, c5q = 0, c5d = 0,
+      c5a = 0, c5b = 0, s5a = 0, s5b = 0, cfa = 0, cfb = 0, sfa = 0, sfb = 0, d = 0, q = 0, d1 = 0, q1 = 0, dt = 0.00005,
+      prevoutput = 0, prevoutput1 = 0, z = 0.001568, error = 0,
+      integral = 0, integral1 = 0, w = 0, Ifb = 0, Iref = 0,
+      Ie = 0, duty = 0, Vac_in = 0, Iin_real = 0, feedforward = 0, Ikp = 0,
+      Vbus_real = 0, Vout_real = 0, Ipi = 0,
+      Vo_filt = 0, Vo_prev = 0, Vbus_filt = 0, Vbus_filt_prev = 0, Ve = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, Ic = 0, triggered = 0,
+      cos_value = 0, sin_value = 0, Vbus_duty = 0, Ipre_max = 1,
       Vref = 140;
-
-double PI(double d);
-void dq(double a, double b, double theta, double* d, double* q);
-void dq1(double d1, double q1, double theta, double* a1, double* b1);
-void filter(double input, double input1, double *output, double *output1);
 
 //==================================================================
 // main
@@ -241,7 +224,7 @@ int main(void)
 
     //--------------------------------------------------------------
     // EPwm/PWM start (and with it, EPwm1's SOCA->ADC trigger) is moved to run
-    // AFTER the ADC is fully configured above — it used to run before, so the
+    // AFTER the ADC is fully configured above - it used to run before, so the
     // very first SOC pulses could hit an unconfigured ADC.
     //--------------------------------------------------------------
     IER |= M_INT1;
@@ -293,15 +276,15 @@ void InitEPwmTimer()
     EPwm1Regs.DBRED = 50;
     EPwm1Regs.DBFED = 50;
     EPwm1Regs.AQCTLA.bit.CAU = AQ_CLEAR;
-    EPwm1Regs.AQCTLA.bit.CAD = AQ_SET;     // was AQ_CLEAR — with no SET action anywhere, EPWM1A/B could never go high; combined with
+    EPwm1Regs.AQCTLA.bit.CAD = AQ_SET;     // was AQ_CLEAR - with no SET action anywhere, EPWM1A/B could never go high; combined with
                                             // IN_MODE/POLSEL below this forced both switches on this leg permanently HIGH (shoot-through).
     EPwm1Regs.AQCTLB.bit.CBU = AQ_CLEAR;
     EPwm1Regs.AQCTLB.bit.CBD = AQ_SET;     // kept in sync with AQCTLA; unused while IN_MODE=DBA_RED_DBB_FED (B is derived from A).
-    EPwm1Regs.CMPA.half.CMPA = 0;          // both arms off before the first ISR — the reset value 0/0 leaves EPWM1B 100% on
+    EPwm1Regs.CMPA.half.CMPA = 0;          // both arms off before the first ISR - the reset value 0/0 leaves EPWM1B 100% on
     EPwm1Regs.CMPB = 2250;
 
     //----------------------------------------------------------------
-    // EPWM2 = totem-pole PFC leg B — this is the role your old EPWM3 had.
+    // EPWM2 = totem-pole PFC leg B - this is the role your old EPWM3 had.
     // Slaved to EPWM1 via SYNCOSEL/TB_SYNC_IN, same as before.
     //----------------------------------------------------------------
     InitEPwm2Gpio();
@@ -323,7 +306,7 @@ void InitEPwmTimer()
     EPwm2Regs.DBRED = 2000;
     EPwm2Regs.DBFED = 2000;
     // Line-frequency leg: commutated by the AQCSFRC software force below, not by CMPA/CMPB.
-    // CMPA=0 could not express "off" here — ZRO=SET outranks CAU=CLEAR, so it held A high.
+    // CMPA=0 could not express "off" here - ZRO=SET outranks CAU=CLEAR, so it held A high.
     // The AQCTL actions below never take effect while a continuous force is active.
     EPwm2Regs.AQCTLA.bit.ZRO = AQ_SET;
     EPwm2Regs.AQCTLA.bit.CAU = AQ_CLEAR;
@@ -335,7 +318,7 @@ void InitEPwmTimer()
 
     InitEPwm3Gpio();
     EPwm3Regs.TBCTL.bit.CTRMODE = TB_COUNT_UPDOWN;
-    EPwm3Regs.TBPRD = 2250;   // was 539 (~167kHz) — now 90MHz/4500 = 20kHz, matching EPwm1
+    EPwm3Regs.TBPRD = 2250;   // was 539 (~167kHz) - now 90MHz/4500 = 20kHz, matching EPwm1
     EPwm3Regs.TBCTL.bit.PHSEN = TB_ENABLE;
     EPwm3Regs.TBPHS.half.TBPHS = 0;
     EPwm3Regs.TBCTR = 0x0000;
@@ -355,7 +338,7 @@ void InitEPwmTimer()
     EPwm3Regs.AQCTLA.bit.CAD = AQ_SET;     
     EPwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
     EPwm3Regs.AQCTLB.bit.CBD = AQ_SET;
-    EPwm3Regs.CMPA.half.CMPA = 0;   // both arms off until Busloop() takes over — the reset value 0/0 is D=1, i.e. high-side 100% on
+    EPwm3Regs.CMPA.half.CMPA = 0;   // both arms off until Busloop() takes over - the reset value 0/0 is D=1, i.e. high-side 100% on
     EPwm3Regs.CMPB = 2250;
 
     //----------------------------------------------------------------
@@ -383,24 +366,22 @@ __interrupt void adc_isr(void)
     Vout = AdcResult.ADCRESULT3 - 2037;
     Vbus = AdcResult.ADCRESULT4 - 2034;
 
-    Vin_real  = Vin  * 0.231343;
     Iin_real  = Iin  * 0.0222222;
-    Iout_real = Iout * 0.014492;
     Vbus_real = Vbus * 0.48604;
     Vout_real = Vout * 0.123668;
 
     lowpass();
     PLL();
     ZeroCrossDetect();   // computes zero_cross_pos/neg + zero_cross_event (edge only, fires once per crossing)
-    CheckPLLLock();      // updates PLL_flag — runs every cycle so it's already progressing during the settle window below
+    CheckPLLLock();      // updates PLL_flag - runs every cycle so it's already progressing during the settle window below
 
     if(PLL_flag)
     {
-        GpioDataRegs.GPASET.bit.GPIO29 = 1;    // LED9 on — PLL locked
+        GpioDataRegs.GPASET.bit.GPIO29 = 1;    // LED9 on - PLL locked
     }
     else
     {
-        GpioDataRegs.GPACLEAR.bit.GPIO29 = 1;  // LED9 off — not locked (or lock lost)
+        GpioDataRegs.GPACLEAR.bit.GPIO29 = 1;  // LED9 off - not locked (or lock lost)
     }
 
     //--------------------------------------------------------------
@@ -416,7 +397,7 @@ __interrupt void adc_isr(void)
         }
         else
         {
-            startupFLAG = 1;   // settle time elapsed — protection and switching may now engage
+            startupFLAG = 1;   // settle time elapsed - protection and switching may now engage
         }
         Hold();
         AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
@@ -428,13 +409,11 @@ __interrupt void adc_isr(void)
 
     if(!protectFLAG)
     {
-        zero_cross = zero_cross_event; // kept for any legacy reads elsewhere
-
         //--------------------------------------------------------------
-        // PFC run/stop. Runs before Busloop() so the Buck reads this cycle's system_running —
+        // PFC run/stop. Runs before Busloop() so the Buck reads this cycle's system_running -
         // that's what makes both stages stop on the same zero crossing.
         //--------------------------------------------------------------
-        if(switch_state == 1 && PLL_flag)   // added PLL_flag — don't start switching until the PLL is confirmed locked
+        if(switch_state == 1 && PLL_flag)   // added PLL_flag - don't start switching until the PLL is confirmed locked
         {
             system_running = 1;
         }
@@ -443,13 +422,12 @@ __interrupt void adc_isr(void)
             system_running = 0;
         }
 
-        UpdateVref();          // shared by currentloop() and Busloop() — must run before both
-        UpdateBusReady();      // must run before UpdateVoutRefRamp()/Busloop() — both read bus_ready
-        UpdateVoutRefRamp();   // soft-starts the shared Vout_ref target once system_running && bus_ready
+        UpdateVref();          // shared by currentloop() and Busloop() - must run before both
+        UpdateVoutRefRamp();   // soft-starts the shared Vout_ref target once switch_state && buck_switch_state
         Busloop();
 
         //--------------------------------------------------------------
-        // Buck runs off Vbus_duty every cycle, independently of switch_state — that's what
+        // Buck runs off Vbus_duty every cycle, independently of switch_state - that's what
         // gives the ">60V bus, 10% preload before the main switch" behaviour.
         //--------------------------------------------------------------
         if(Vbus_duty <= 0)
@@ -487,7 +465,7 @@ __interrupt void adc_isr(void)
             }
             else if(b1 > 0)
             {
-                EPwm1Regs.CMPA.half.CMPA = final_duty * 2250;   // was test_duty — undeclared in main.c (that's
+                EPwm1Regs.CMPA.half.CMPA = final_duty * 2250;   // was test_duty - undeclared in main.c (that's
                 EPwm1Regs.CMPB = final_duty * 2250;             // test_pll_pwm.c's stand-in var)
                 EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;
                 EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_HIGH;
@@ -516,12 +494,6 @@ __interrupt void adc_isr(void)
         Hold();
     }
 
-    v_index++;
-    if(v_index >= N)
-    {
-        v_index = 0;
-    }
-
     AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
 }
@@ -533,18 +505,18 @@ void ZeroCrossDetect(void)
     zero_cross_neg = (theta_prev < 4.69f && integral1 >= 4.69f);
 
     zc_now = (zero_cross_pos || zero_cross_neg);
-    zero_cross_event = (zc_now && !zc_prev);   // edge only — fires once
+    zero_cross_event = (zc_now && !zc_prev);   // edge only - fires once
     zc_prev = zc_now;
 
     theta_prev = integral1;
 }
 
 //==================================================================
-// CheckPLLLock — counter-based lock confirmation (mirrors the reference
+// CheckPLLLock - counter-based lock confirmation (mirrors the reference
 // CheckPLLLock() pattern, adapted to this file's own d1/q1/integral1).
 // Thresholds are carried over as a starting point from that reference
 // (same 0.231343 ADC scaling, so amplitudes should be in a similar range)
-// — watch q1/d1 on the bench and retune if they don't match your hardware.
+// - watch q1/d1 on the bench and retune if they don't match your hardware.
 //==================================================================
 void CheckPLLLock(void)
 {
@@ -576,15 +548,15 @@ void CheckPLLLock(void)
         return;
     }
 
-    PLLcount = 0;   // in-between zone — neither clearly locked nor clearly failed; don't let count creep up here
+    PLLcount = 0;   // in-between zone - neither clearly locked nor clearly failed; don't let count creep up here
 }
 
 void currentloop(void)
 {
-    Ic = Ipre * cos_value;   // moved above its use below — was computed after Iref=Ic, so Iref was
+    Ic = Ipre * cos_value;   // moved above its use below - was computed after Iref=Ic, so Iref was
                               // reading last cycle's stale Ic instead of this cycle's fresh value
 
-    float Vbus_for_Ikp = Vbus_filt;   // filtered (not raw Vbus_real) — the 10uF bus cap gives significant
+    float Vbus_for_Ikp = Vbus_filt;   // filtered (not raw Vbus_real) - the 10uF bus cap gives significant
                                        // 100/120Hz ripple on Vbus_real, which would otherwise modulate Ikp
                                        // at that same ripple frequency
     if(Vbus_for_Ikp < 50.0f)  Vbus_for_Ikp = 50.0f;    // floor: keeps the division from blowing up if Vbus
@@ -592,11 +564,11 @@ void currentloop(void)
     if(Vbus_for_Ikp > 250.0f) Vbus_for_Ikp = 250.0f;   // ceiling: bounds Ikp from the other side too
     Ikp = (2.0f * 3.14159265f * CURRENT_LOOP_FC_HZ * CURRENT_LOOP_L_HENRY) / Vbus_for_Ikp;   // 2*pi*fc*L/Vbus
 
-    if(Ikp > 0.40f) Ikp = 0.40f;    // explicit belt-and-suspenders bound on Ikp itself — redundant with the
+    if(Ikp > 0.40f) Ikp = 0.40f;    // explicit belt-and-suspenders bound on Ikp itself - redundant with the
     if(Ikp < 0.05f) Ikp = 0.05f;    // Vbus_for_Ikp clamp above given this is a monotonic 1/x relationship, but
                                      // keeps Ikp's safe range self-evident here. Range widened to bracket the
                                      // new formula's natural output (~0.0706 at Vbus=250V to ~0.353 at Vbus=50V)
-                                     // with margin — retune together if CURRENT_LOOP_L_HENRY/FC_HZ change again
+                                     // with margin - retune together if CURRENT_LOOP_L_HENRY/FC_HZ change again
 
     if(b1 >= 0)
     {
@@ -633,74 +605,42 @@ void UpdateVref(void)
 }
 
 //==================================================================
-// UpdateBusReady — requires PLL_flag && Vbus_real>=60 to hold continuously for
-// BUS_SETTLE_CYCLES (~1s @ 20kHz) before bus_ready latches. Buck stays fully off
-// and Vout_ref stays parked at VOUT_REF_START the whole time — only once bus_ready
-// is set do Busloop() and UpdateVoutRefRamp() below start doing anything.
+// Busloop - GPIO10 (buck_switch_state) arms Buck at a fixed 10% preload duty;
+// GPIO11 (switch_state) on top of that switches it into closed-form regulation
+// at Vout_ref/Vref. Neither switch on (or PLL not locked) holds Buck fully off.
 //==================================================================
-void UpdateBusReady(void)
-{
-    if(PLL_flag && Vbus_real >= 60)
-    {
-        if(busSettleCount < BUS_SETTLE_CYCLES)
-        {
-            busSettleCount++;
-        }
-        else
-        {
-            bus_ready = 1;
-        }
-    }
-    else
-    {
-        busSettleCount = 0;
-        bus_ready = 0;
-    }
-}
-
 void Busloop(void)
 {
-    if(switch_state == 1)
+    if(PLL_flag && buck_switch_state)
     {
-        main_switch_seen = 1;
-    }
-
-    if(PLL_flag && Vbus_real >= 120)
-    {
-        if(main_switch_seen && !system_running)
+        if(switch_state == 1)
         {
-            Vbus_duty = 0;
-        }
-        else if(bus_ready && system_running)
-        {
-            Vbus_duty = Vout_ref / Vref;   // open-loop Vo/Vref — uses the (ramping) target Vout_ref, not the
-                                            // live measurement, since VoltageLoop() already regulates Vout_real
+            Vbus_duty = Vout_ref / Vref;
             if(Vbus_duty > 0.90) Vbus_duty = 0.90;
             if(Vbus_duty < 0.10) Vbus_duty = 0.10;
         }
         else
         {
-            Vbus_duty = 0.10;   // preload: before the main switch has ever been on, and during the 1s
-                                 // settle window after it — so the ramp above starts from this same 10%
+            Vbus_duty = 0.1;
         }
     }
     else
     {
-        Vbus_duty = 0;   // fully off — bus hasn't even reached the 60V floor yet
+        Vbus_duty = 0;
     }
 }
 
 //==================================================================
-// UpdateVoutRefRamp — soft-starts the shared Vout_ref target from VOUT_REF_START up to
-// VOUT_REF_FINAL over BUCK_RAMP_CYCLES cycles, once the PFC is running AND the bus has
-// settled (bus_ready). Resets back to the start value whenever either condition drops,
-// so every fresh start begins a clean ramp rather than resuming mid-ramp. Gated on
-// system_running, not switch_state, so the ramp holds instead of collapsing to
-// VOUT_REF_START during the wind-down window after the switch is turned off.
+// UpdateVoutRefRamp - soft-starts the shared Vout_ref target from VOUT_REF_START up to
+// VOUT_REF_FINAL over BUCK_RAMP_CYCLES cycles, once both switches are on - the same
+// condition Busloop() uses to enter its Vout_ref/Vref branch, so the ramp starts
+// exactly when that branch starts reading it. Resets back to the start value whenever
+// either switch drops, so every fresh start begins a clean ramp rather than resuming
+// mid-ramp.
 //==================================================================
 void UpdateVoutRefRamp(void)
 {
-    if(system_running && bus_ready)
+    if(switch_state && buck_switch_state)
     {
         if(buck_ramp_count < BUCK_RAMP_CYCLES)
         {
@@ -748,9 +688,9 @@ void turnoff(void)
     SetSafeOutputs();
 }
 
-// Hold — normal idle / not-yet-running reset for the PFC side only. NOT a fault: resets
+// Hold - normal idle / not-yet-running reset for the PFC side only. NOT a fault: resets
 // every PFC control-loop integrator/state so a later start begins clean. Deliberately does
-// NOT touch EPwm3/Buck (uses SetSafeOutputsPFC, not the full SetSafeOutputs) — Buck now runs
+// NOT touch EPwm3/Buck (uses SetSafeOutputsPFC, not the full SetSafeOutputs) - Buck now runs
 // independently of system_running/starset_up and manages its own output via Busloop() every
 // cycle, so forcing it "safe" here would fight that and undo what Busloop() just computed.
 void Hold(void)
@@ -765,7 +705,6 @@ void Hold(void)
     duty = 0;
     Ipre_prev = 0;
     Ve_prev = 0;
-    Vout_soft = 5;
     Ipre_max = 1;
     triggered = 0;
 }
@@ -825,6 +764,30 @@ void debun(void)
         else
         {
             switch_state = 0;
+        }
+    }
+
+    //----- second switch (GPIO10) - same debounce pattern, gates Buck separately -----
+    if(GpioDataRegs.GPADAT.bit.GPIO10 == 1)
+    {
+        if(buck_count < 1000)
+        {
+            buck_count++;
+        }
+        if(buck_count >= 1000)
+        {
+            buck_switch_state = 1;
+        }
+    }
+    else
+    {
+        if(buck_count > 0)
+        {
+            buck_count--;
+        }
+        else
+        {
+            buck_switch_state = 0;
         }
     }
 }
@@ -898,12 +861,10 @@ void PLL(void)
             break;
     }
 
-    error_1 = error;
     error = -d;
     integral = integral + error * ki * dt;
     w = (error * kp) + integral + 376.991;
 
-    w1 = w;
     integral1 = fmod(integral1 + w * dt, 6.28);
 
     z = 0.001568;
