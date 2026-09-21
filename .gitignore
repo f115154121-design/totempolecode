@@ -18,3 +18,11 @@ RemoteSystemsTempFiles/
 # OS junk
 Thumbs.db
 desktop.ini
+
+# 課堂作業與實驗記錄 - 留在本機,不同步。開頭的 / 表示只忽略根目錄,
+# 專案資料夾裡同名副檔名的檔案不受影響。
+/28035TEST/
+/main/
+/*.txt
+/*.png
+/*.PNG
