@@ -97,13 +97,14 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 #define Vkp 0.1
 #define Vki 0.01
 
-//----- current-loop Kp design -----------------------------------------
-// Ikp = 2*pi*fc*L / Vbus - sets the current loop's proportional-gain crossover
-// at fc, standard design for a boost-type inductor current loop. Retune these
-// two if L is remeasured again or fc needs to change; don't hand-recompute
-// the constant separately.
-#define CURRENT_LOOP_L_HENRY  0.0015608f   // measured input inductor (was ~4.71/Vbus derived from an earlier L)
-#define CURRENT_LOOP_FC_HZ    1800.0f      // desired current-loop crossover frequency
+//----- current-loop Kp (fixed) ----------------------------------------
+// Was dynamic (2*pi*fc*L/Vbus, recomputed each cycle to hold crossover at fc).
+// Now pinned to a constant, designed at the HIGHEST operating bus (~200V) so the
+// loop only ever gets slower/safer at lower bus, never more aggressive:
+//   Kp = 2*pi*1200*0.0015658/200 ~= 0.059 -> 0.06
+// (fc=1200Hz, L=1.5658mH measured, Vbus=200V worst case).
+// Re-derive if L, the target crossover, or the max bus voltage changes.
+#define CURRENT_LOOP_KP  0.06f
 
 //----- slow-leg (EPwm2) commutation dead window -----------------------
 // Both slow-leg arms are held off while |b1| is under this threshold. The window has to
@@ -126,7 +127,7 @@ float a = 0, b = 0, b1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0
       integral = 0, integral1 = 0, w = 0, Ifb = 0, Iref = 0,
       Ie = 0, duty = 0, Vac_in = 0, Iin_real = 0, feedforward = 0, Ikp = 0,
       Vbus_real = 0, Vout_real = 0, Ipi = 0,
-      Vo_filt = 0, Vo_prev = 0, Vbus_filt = 0, Vbus_filt_prev = 0, Ve = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, Ic = 0, triggered = 0,
+      Vo_filt = 0, Vo_prev = 0, Ve = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, Ic = 0, triggered = 0,
       cos_value = 0, sin_value = 0, Vbus_duty = 0, Ipre_max = 1,
       Vref = 140;
 
@@ -596,19 +597,7 @@ void currentloop(void)
     Ic = Ipre * cos_value;   // moved above its use below - was computed after Iref=Ic, so Iref was
                               // reading last cycle's stale Ic instead of this cycle's fresh value
 
-    float Vbus_for_Ikp = Vbus_filt;   // filtered (not raw Vbus_real) - the 10uF bus cap gives significant
-                                       // 100/120Hz ripple on Vbus_real, which would otherwise modulate Ikp
-                                       // at that same ripple frequency
-    if(Vbus_for_Ikp < 50.0f)  Vbus_for_Ikp = 50.0f;    // floor: keeps the division from blowing up if Vbus
-                                                        // reads low/near-zero (e.g. before the PFC boosts up)
-    if(Vbus_for_Ikp > 250.0f) Vbus_for_Ikp = 250.0f;   // ceiling: bounds Ikp from the other side too
-    Ikp = (2.0f * 3.14159265f * CURRENT_LOOP_FC_HZ * CURRENT_LOOP_L_HENRY) / Vbus_for_Ikp;   // 2*pi*fc*L/Vbus
-
-    if(Ikp > 0.40f) Ikp = 0.40f;    // explicit belt-and-suspenders bound on Ikp itself - redundant with the
-    if(Ikp < 0.05f) Ikp = 0.05f;    // Vbus_for_Ikp clamp above given this is a monotonic 1/x relationship, but
-                                     // keeps Ikp's safe range self-evident here. Range widened to bracket the
-                                     // new formula's natural output (~0.0706 at Vbus=250V to ~0.353 at Vbus=50V)
-                                     // with margin - retune together if CURRENT_LOOP_L_HENRY/FC_HZ change again
+    Ikp = CURRENT_LOOP_KP;   // fixed gain (see CURRENT_LOOP_KP define for the derivation)
 
     if(b1 >= 0)
     {
@@ -627,6 +616,14 @@ void currentloop(void)
     Ie = Iref - Ifb;
     Ipi = Ikp * Ie;
     duty = feedforward + Ipi;
+
+    // Startup duty soft-start: ride the total duty up with Ipre_max (1->8, the same
+    // ~0.7s current-amplitude ramp) instead of letting switching begin at the near-1
+    // feedforward duty near the zero crossing - which the low-gain P current loop
+    // can't pull back before the inductor current overshoots. Cap reaches 1.0 once
+    // Ipre_max hits 8, so it stops limiting after soft-start and the 0.97 clamp rules.
+    float duty_cap = 0.30f + 0.70f * ((Ipre_max - 1.0f) / 7.0f);
+    if(duty > duty_cap) duty = duty_cap;
 
     if(duty >= 0.97) duty = 0.97;
     if(duty <= 0.03) duty = 0.03;
@@ -836,9 +833,6 @@ void lowpass(void)
 {
     Vo_filt = Vo_prev + z * (Vout_real - Vo_filt);
     Vo_prev = Vo_filt;
-
-    Vbus_filt = Vbus_filt_prev + z * (Vbus_real - Vbus_filt);   // same ~5Hz filter, well below the
-    Vbus_filt_prev = Vbus_filt;                                 // 100/120Hz bus ripple this is meant to reject
 }
 
 void VoltageLoop(void)
