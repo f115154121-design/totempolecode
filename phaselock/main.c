@@ -46,6 +46,12 @@ int system_running = 0, starset_up = 0, switch_state = 0, count = 0;
 //----- during the initial bus charge-up transient.
 int buck_switch_state = 0, buck_count = 0;
 
+//----- shutdown latch: once BOTH switches have been on (full start reached), turning
+//----- GPIO11 off latches the whole system fully off - Buck AND PFC - instead of the
+//----- Buck falling back to its 10% preload. Clears only when BOTH switches are off,
+//----- so a restart must redo the GPIO10 -> GPIO11 sequence from scratch.
+int fully_started = 0, shutdown_latch = 0;
+
 //----- power-up settle delay ----------------------------------------
 // ADC / analog front-end can read stale or transient values for a short time after
 // power-up, which could otherwise trip protect() immediately. Hold everything in a
@@ -409,6 +415,40 @@ __interrupt void adc_isr(void)
 
     if(!protectFLAG)
     {
+        //--------------------------------------------------------------
+        // Shutdown latch. Full start = both switches on at once; after that,
+        // dropping GPIO11 latches everything fully off (Buck + PFC) and keeps
+        // it off until BOTH switches are off again (clean restart required).
+        //--------------------------------------------------------------
+        if(switch_state && buck_switch_state)
+        {
+            fully_started = 1;
+        }
+        if(fully_started && switch_state == 0)
+        {
+            shutdown_latch = 1;
+        }
+        if(switch_state == 0 && buck_switch_state == 0)
+        {
+            fully_started = 0;
+            shutdown_latch = 0;
+        }
+
+        if(shutdown_latch)
+        {
+            system_running = 0;
+            Vbus_duty = 0;
+            buck_ramp_count = 0;
+            Vout_ref = VOUT_REF_START;
+            Hold();                          // PFC off + reset all PFC control state
+            EPwm3Regs.CMPA.half.CMPA = 0;    // Buck fully off (both arms)
+            EPwm3Regs.CMPB = 2250;
+
+            AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
+            PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
+            return;
+        }
+
         //--------------------------------------------------------------
         // PFC run/stop. Runs before Busloop() so the Buck reads this cycle's system_running -
         // that's what makes both stages stop on the same zero crossing.
