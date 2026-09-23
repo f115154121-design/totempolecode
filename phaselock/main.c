@@ -144,11 +144,13 @@ int   starset_up_prev = 0;
 float duty_prev_cmd = 0;
 
 //----- Vref startup ramp (see UpdateVref) -----------------------------
-// Scales the bus-reference envelope at startup so Vref grows into its full
-// |b1|+40 height rather than stepping there the instant switching begins.
-// 0.5 starts the target at half height; raise it for a faster bus ramp at
-// the cost of more inrush, lower it for a gentler one.
-#define VREF_RAMP_START 0.5f
+// Vref departs from wherever the bus actually sits when switching begins
+// (Vref_start, latched from Vbus_real) and interpolates up to the full
+// |b1|+40 envelope, so the feedforward is accurate from the very first
+// cycle instead of aiming at a target the bus hasn't reached yet.
+// VREF_MIN only bounds the 1/Vref divisions in currentloop()/Busloop().
+#define VREF_MIN 50.0f
+float Vref_start = 0;
 
 //----- current-loop Kp (fixed) ----------------------------------------
 // Was dynamic (2*pi*fc*L/Vbus, recomputed each cycle to hold crossover at fc).
@@ -722,27 +724,44 @@ void currentloop(void)
 // swapping in the measured bus makes d = 1 - Vac/Vbus an identity with no
 // restoring force, and the bus stops tracking anything.
 //
-// VREF_RAMP_START..1.0 scales that envelope during startup so the target
-// grows into its full height instead of appearing as a step. The gap between
-// Vref and the still-charging bus is what the feedforward turns into inrush
-// current, so shrinking the gap at t=0 is what bounds the startup current -
-// the shape Vbus tracks is unchanged, only its amplitude ramps.
+// The gap between Vref and the still-charging bus is what the feedforward
+// turns into inrush current: pure-P can only correct it by (d_error/Ikp),
+// so at Ikp=0.06 even a 0.25 duty mismatch is ~4A of current error that no
+// realistic gain can claw back. Rather than fight it, start Vref AT the
+// measured bus and interpolate up to the full envelope - the feedforward is
+// then correct from the first switching cycle, which is the same thing the
+// reference design buys with its pre-charge stage before switching begins.
 //==================================================================
 void UpdateVref(void)
 {
-    // rides the existing Ipre_max soft-start (1->8, ~0.7s), so the bus target
-    // and the current-amplitude limit open up together
-    float vref_scale = VREF_RAMP_START +
-                       (1.0f - VREF_RAMP_START) * ((Ipre_max - 1.0f) / 7.0f);
+    // 0 -> 1 over the existing Ipre_max soft-start (1->8, ~0.7s), so the bus
+    // target and the current-amplitude limit open up together
+    float ramp = (Ipre_max - 1.0f) / 7.0f;
+    if(ramp < 0.0f) ramp = 0.0f;
+    if(ramp > 1.0f) ramp = 1.0f;
 
+    // Re-latch the present bus until the ramp actually starts moving, so the
+    // departure point is wherever the bus sits at that moment. Frozen from
+    // then on: Vref must not keep chasing Vbus_real, or a sagging bus would
+    // drag its own target down after it.
+    if(ramp <= 0.0f)
+    {
+        Vref_start = Vbus_real;
+    }
+
+    float vref_full;
     if(fabsf(b1) > 100)   // b1 = PLL-locked, filtered reconstruction of Vac (same source currentloop() uses)
     {
-        Vref = (fabsf(b1) + 40) * vref_scale;
+        vref_full = fabsf(b1) + 40;
     }
     else
     {
-        Vref = 140 * vref_scale;
+        vref_full = 140;
     }
+
+    Vref = Vref_start + (vref_full - Vref_start) * ramp;
+
+    if(Vref < VREF_MIN) Vref = VREF_MIN;
 }
 
 //==================================================================
