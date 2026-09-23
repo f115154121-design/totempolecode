@@ -143,6 +143,13 @@ int   starset_up_prev = 0;
 #define DUTY_CAP_START 0.15f
 float duty_prev_cmd = 0;
 
+//----- Vref startup ramp (see UpdateVref) -----------------------------
+// Scales the bus-reference envelope at startup so Vref grows into its full
+// |b1|+40 height rather than stepping there the instant switching begins.
+// 0.5 starts the target at half height; raise it for a faster bus ramp at
+// the cost of more inrush, lower it for a gentler one.
+#define VREF_RAMP_START 0.5f
+
 //----- current-loop Kp (fixed) ----------------------------------------
 // Was dynamic (2*pi*fc*L/Vbus, recomputed each cycle to hold crossover at fc).
 // Now pinned to a constant, designed at the HIGHEST operating bus (~200V) so the
@@ -707,15 +714,34 @@ void currentloop(void)
     duty_prev_cmd = duty;
 }
 
+//==================================================================
+// UpdateVref - the bus reference the feedforward shapes Vbus onto. Because
+// currentloop() commands d = 1 - Vac_in/Vref, the boost settles at
+// Vbus = Vac_in/(1-d) = Vref, so this IS the bus-shaping mechanism: Vbus
+// follows whatever envelope Vref describes. Keep the feedforward on Vref -
+// swapping in the measured bus makes d = 1 - Vac/Vbus an identity with no
+// restoring force, and the bus stops tracking anything.
+//
+// VREF_RAMP_START..1.0 scales that envelope during startup so the target
+// grows into its full height instead of appearing as a step. The gap between
+// Vref and the still-charging bus is what the feedforward turns into inrush
+// current, so shrinking the gap at t=0 is what bounds the startup current -
+// the shape Vbus tracks is unchanged, only its amplitude ramps.
+//==================================================================
 void UpdateVref(void)
 {
+    // rides the existing Ipre_max soft-start (1->8, ~0.7s), so the bus target
+    // and the current-amplitude limit open up together
+    float vref_scale = VREF_RAMP_START +
+                       (1.0f - VREF_RAMP_START) * ((Ipre_max - 1.0f) / 7.0f);
+
     if(fabsf(b1) > 100)   // b1 = PLL-locked, filtered reconstruction of Vac (same source currentloop() uses)
     {
-        Vref = fabsf(b1) + 40;
+        Vref = (fabsf(b1) + 40) * vref_scale;
     }
     else
     {
-        Vref = 140;
+        Vref = 140 * vref_scale;
     }
 }
 
