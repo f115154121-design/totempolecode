@@ -46,6 +46,11 @@ int system_running = 0, starset_up = 0, switch_state = 0, count = 0;
 //----- during the initial bus charge-up transient.
 int buck_switch_state = 0, buck_count = 0;
 
+//----- GPIO10 engages the Buck only on a zero crossing, mirroring the PFC's starset_up.
+//----- Cleared whenever GPIO10 drops or the PLL unlocks, so every start re-syncs rather
+//----- than resuming wherever the previous run left off.
+int buck_started = 0;
+
 //----- shutdown latch: once BOTH switches have been on (full start reached), turning
 //----- GPIO11 off latches the whole system fully off - Buck AND PFC - instead of the
 //----- Buck falling back to its 10% preload. Clears only when BOTH switches are off,
@@ -89,6 +94,28 @@ float theta_prev = 0;
 int   zero_cross_pos = 0, zero_cross_neg = 0;
 int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 
+//----- startup capture buffer (debug) ------------------------------
+// Arms itself the instant starset_up first goes 0->1 (i.e. the very first
+// activated switching cycle after system_running turns on), then logs one
+// sample per ADC-ISR cycle (every 50us) until DBG_LEN samples are taken or
+// protect() trips (whichever comes first - the inner block stops running
+// once protectFLAG latches, which freezes the buffer automatically).
+// Read out with CCS (View -> Expressions, or Tools -> Graph on the arrays)
+// after halting the target; dbg_index shows how many samples were filled.
+//----------------------------------------------------------------------
+#define DBG_LEN 333
+float dbg_b1[DBG_LEN];
+float dbg_final_duty[DBG_LEN];
+float dbg_Ie[DBG_LEN];
+float dbg_Iin_real[DBG_LEN];
+float dbg_Ipre[DBG_LEN];
+float dbg_Vin_real[DBG_LEN];
+float dbg_Vbus_real[DBG_LEN];
+int   dbg_index = 0;
+int   dbg_armed = 0;
+int   dbg_done = 0;
+int   starset_up_prev = 0;
+
 //==================================================================
 // PLL / control constants
 //==================================================================
@@ -96,6 +123,25 @@ int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
 #define ki 0.5
 #define Vkp 0.1
 #define Vki 0.01
+
+//----- duty slew-rate limiter (insurance against a single-cycle jump) --
+// duty_cap already bounds duty's magnitude, but nothing previously stopped
+// it from jumping straight from 0 (Hold()'s reset value) to duty_cap on the
+// very first activated cycle. Limiting the per-cycle step forces even a
+// worst-case first cycle (e.g. wrong slow-leg direction) to ramp in over
+// several cycles instead of slamming the full volt-seconds in one shot -
+// gives protect() a chance to catch a real fault at a lower peak current
+// before it dumps into Vbus. 0.01/cycle -> ~15 cycles (0.75ms) to reach the
+// DUTY_CAP_START startup duty_cap; independent of and much faster than the
+// existing ~0.7s Ipre_max ramp, so it doesn't slow down normal soft-start.
+#define DUTY_SLEW_MAX 0.01f
+
+// Startup duty_cap floor (see currentloop()) - was 0.30, lowered further to
+// shrink the residual Vo/Vac step still seen at the very first activated
+// cycle even with DUTY_SLEW_MAX in place. Retune if soft-start needs more
+// headroom (too low may stall current buildup near the zero crossing).
+#define DUTY_CAP_START 0.15f
+float duty_prev_cmd = 0;
 
 //----- current-loop Kp (fixed) ----------------------------------------
 // Was dynamic (2*pi*fc*L/Vbus, recomputed each cycle to hold crossover at fc).
@@ -129,7 +175,7 @@ float a = 0, b = 0, b1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0
       Vbus_real = 0, Vout_real = 0, Ipi = 0,
       Vo_filt = 0, Vo_prev = 0, Ve = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, Ic = 0, triggered = 0,
       cos_value = 0, sin_value = 0, Vbus_duty = 0, Ipre_max = 1,
-      Vref = 140;
+      Vref = 140,Vin_real = 0;
 
 //==================================================================
 // main
@@ -339,8 +385,8 @@ void InitEPwmTimer()
     EPwm3Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
     EPwm3Regs.DBCTL.bit.POLSEL = DB_ACTV_HIC;
     EPwm3Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
-    EPwm3Regs.DBRED = 50;
-    EPwm3Regs.DBFED = 50;
+    EPwm3Regs.DBRED = 75;
+    EPwm3Regs.DBFED = 75;
     EPwm3Regs.AQCTLA.bit.CAU = AQ_CLEAR;
     EPwm3Regs.AQCTLA.bit.CAD = AQ_SET;     
     EPwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
@@ -376,6 +422,7 @@ __interrupt void adc_isr(void)
     Iin_real  = Iin  * 0.0222222;
     Vbus_real = Vbus * 0.48604;
     Vout_real = Vout * 0.123668;
+    Vin_real = Vin * 0.231343;
 
     lowpass();
     PLL();
@@ -478,8 +525,8 @@ __interrupt void adc_isr(void)
         }
         else
         {
-            EPwm3Regs.CMPA.half.CMPA = (1 - Vbus_duty) * 2250;
-            EPwm3Regs.CMPB = (1 - Vbus_duty) * 2250;
+            EPwm3Regs.CMPA.half.CMPA = Vbus_duty * 2250;
+            EPwm3Regs.CMPB = Vbus_duty * 2250;
         }
 
         if(system_running == 1)
@@ -496,6 +543,31 @@ __interrupt void adc_isr(void)
                 float final_duty = duty;
                 if(final_duty > 0.95) final_duty = 0.95;
 
+                //----- startup capture (debug) -----
+                if(!starset_up_prev)   // starset_up just went 0->1 this cycle: (re)arm from sample 0
+                {
+                    dbg_index = 0;
+                    dbg_armed = 1;
+                    dbg_done = 0;
+                }
+                starset_up_prev = starset_up;
+
+                if(dbg_armed && !dbg_done)
+                {
+                    dbg_b1[dbg_index]         = b1;
+                    dbg_final_duty[dbg_index] = final_duty;
+                    dbg_Ie[dbg_index]         = Ie;
+                    dbg_Iin_real[dbg_index]   = Iin_real;
+                    dbg_Ipre[dbg_index]       = Ipre;
+                    dbg_Vin_real[dbg_index]   = Vin_real;
+                    dbg_Vbus_real[dbg_index]  = Vbus_real;
+                    dbg_index++;
+                    if(dbg_index >= DBG_LEN)
+                    {
+                        dbg_done = 1;
+                        dbg_armed = 0;
+                    }
+                }
 
             if(b1 < 5 && b1 > -5)
             {
@@ -622,11 +694,17 @@ void currentloop(void)
     // feedforward duty near the zero crossing - which the low-gain P current loop
     // can't pull back before the inductor current overshoots. Cap reaches 1.0 once
     // Ipre_max hits 8, so it stops limiting after soft-start and the 0.97 clamp rules.
-    float duty_cap = 0.30f + 0.70f * ((Ipre_max - 1.0f) / 7.0f);
+    float duty_cap = DUTY_CAP_START + (1.0f - DUTY_CAP_START) * ((Ipre_max - 1.0f) / 7.0f);
     if(duty > duty_cap) duty = duty_cap;
 
     if(duty >= 0.97) duty = 0.97;
     if(duty <= 0.03) duty = 0.03;
+
+    // Slew-rate insurance (see DUTY_SLEW_MAX above) - clamp this cycle's step
+    // relative to what was actually commanded last cycle.
+    if(duty > duty_prev_cmd + DUTY_SLEW_MAX) duty = duty_prev_cmd + DUTY_SLEW_MAX;
+    if(duty < duty_prev_cmd - DUTY_SLEW_MAX) duty = duty_prev_cmd - DUTY_SLEW_MAX;
+    duty_prev_cmd = duty;
 }
 
 void UpdateVref(void)
@@ -650,7 +728,16 @@ void Busloop(void)
 {
     if(PLL_flag && buck_switch_state)
     {
-        if(switch_state == 1)
+        if(zero_cross_event)
+        {
+            buck_started = 1;
+        }
+
+        if(!buck_started)
+        {
+            Vbus_duty = 0;   // GPIO10 already on, but hold off until the next zero crossing
+        }
+        else if(switch_state == 1)
         {
             Vbus_duty = Vout_ref / Vref;
             if(Vbus_duty > 0.90) Vbus_duty = 0.90;
@@ -663,6 +750,7 @@ void Busloop(void)
     }
     else
     {
+        buck_started = 0;
         Vbus_duty = 0;
     }
 }
@@ -735,11 +823,13 @@ void Hold(void)
     SetSafeOutputsPFC();
 
     starset_up = 0;
+    starset_up_prev = 0;   // so the next start re-arms dbg capture from sample 0 again
     Ipi = 0;
     Ie = 0;
     Iref = 0;
     Ifb = 0;
     duty = 0;
+    duty_prev_cmd = 0;   // so the slew limiter also ramps from true zero on the next start
     Ipre_prev = 0;
     Ve_prev = 0;
     Ipre_max = 1;
@@ -752,14 +842,14 @@ void protect(void)
     if(protectFLAG)
         goto ProtectLED;
 
-    if(fabsf(Iin_real) > 12 || Vbus_real > 230)   // combined so a simultaneous over-current AND over-voltage
+    if(fabsf(Iin_real) > 15 || Vbus_real > 230)   // combined so a simultaneous over-current AND over-voltage
                                                    // both get recorded below, instead of the first one checked
                                                    // (via else-if) silently hiding the other
     {
         turnoff();
         protectFLAG = 1;
 
-        if(fabsf(Iin_real) > 12)
+        if(fabsf(Iin_real) > 15)
         {
             Iin_protect_value = Iin_real;
             Iin_protectFLAG = 1;
