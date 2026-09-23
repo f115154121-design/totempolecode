@@ -152,14 +152,18 @@ float duty_prev_cmd = 0;
 #define VREF_MIN 50.0f
 float Vref_start = 0;
 
-//----- current-loop Kp (fixed) ----------------------------------------
-// Was dynamic (2*pi*fc*L/Vbus, recomputed each cycle to hold crossover at fc).
-// Now pinned to a constant, designed at the HIGHEST operating bus (~200V) so the
-// loop only ever gets slower/safer at lower bus, never more aggressive:
-//   Kp = 2*pi*1200*0.0015658/200 ~= 0.059 -> 0.06
-// (fc=1200Hz, L=1.5658mH measured, Vbus=200V worst case).
-// Re-derive if L, the target crossover, or the max bus voltage changes.
-#define CURRENT_LOOP_KP  0.06f
+//----- current-loop Kp (dynamic) ---------------------------------------
+// Kp = K/Vbus, matching the PSIM model this design was validated against.
+// The boost's duty->current plant gain is Vbus/(sL), so dividing by the
+// measured bus cancels it and holds the loop bandwidth constant at every
+// bus voltage - a fixed Kp instead detunes the loop everywhere except the
+// one bus it was designed at.
+//   K = 2*pi*fc*L = 2*pi*945*0.0015658 ~= 9.3  (L=1.5658mH measured)
+// Floor the divisor (not Kp) at 10V, same as PSIM: below that the bus sits
+// under the line peak and the boost isn't regulating anyway.
+#define CURRENT_LOOP_K       9.3f
+#define CURRENT_LOOP_VBUS_MIN 10.0f
+#define CURRENT_LOOP_KP_MIN   0.001f
 
 //----- slow-leg (EPwm2) commutation dead window -----------------------
 // Both slow-leg arms are held off while |b1| is under this threshold. The window has to
@@ -549,8 +553,14 @@ __interrupt void adc_isr(void)
                 VoltageLoop();
                 currentloop();
 
+                // Independent of currentloop()'s own [0.03, 0.97] clamp on purpose:
+                // this is the last bound before the CMPA writes below, and both the
+                // D and (1-D) branches need final_duty inside [0,1] or the Uint16
+                // register lands past TBPRD (or wraps, for a negative float) and the
+                // compare stops matching - which latches a gate on instead of switching.
                 float final_duty = duty;
                 if(final_duty > 0.95) final_duty = 0.95;
+                if(final_duty < 0.03) final_duty = 0.03;
 
                 //----- startup capture (debug) -----
                 if(!starset_up_prev)   // starset_up just went 0->1 this cycle: (re)arm from sample 0
@@ -678,7 +688,13 @@ void currentloop(void)
     Ic = Ipre * cos_value;   // moved above its use below - was computed after Iref=Ic, so Iref was
                               // reading last cycle's stale Ic instead of this cycle's fresh value
 
-    Ikp = CURRENT_LOOP_KP;   // fixed gain (see CURRENT_LOOP_KP define for the derivation)
+    float vbus_for_ikp = Vbus_real;   // measured bus, not Vref - this divisor exists to
+                                       // cancel the plant's own Vbus gain, so it has to be
+                                       // the real one (unlike the feedforward, where Vref
+                                       // is what shapes the bus)
+    if(vbus_for_ikp < CURRENT_LOOP_VBUS_MIN) vbus_for_ikp = CURRENT_LOOP_VBUS_MIN;
+    Ikp = CURRENT_LOOP_K / vbus_for_ikp;
+    if(Ikp < CURRENT_LOOP_KP_MIN) Ikp = CURRENT_LOOP_KP_MIN;
 
     if(b1 >= 0)
     {
