@@ -72,13 +72,14 @@ int PLLcount = 0, PLLERRcount = 0;
 
 //----- Buck soft-start ramp (shared Vout_ref target for VoltageLoop() and Busloop()) -----
 // Once the main switch (SW1 -> switch_state) turns on, Vout_ref ramps from VOUT_REF_START
-// to VOUT_REF_FINAL over BUCK_RAMP_CYCLES ADC-ISR cycles (~2s @ 20kHz, per PLL()'s dt=0.00005).
+// to VOUT_REF_FINAL over BUCK_RAMP_CYCLES ADC-ISR cycles (~5s @ 20kHz, per PLL()'s dt=0.00005).
 // Both the PFC outer voltage loop and the Buck feedforward read this SAME variable so they
 // always target the same setpoint - if they used different/unsynced targets, the PFC's Ipre
-// and the Buck's duty would be aiming at different output levels during the ramp.
+// and the Buck's duty would be aiming at different output levels during the ramp. Keep this
+// duration matched to VOUT_SOFT_STEP's below, or the two stages desync mid-ramp.
 #define VOUT_REF_START   10.0f
 #define VOUT_REF_FINAL   100.0f
-#define BUCK_RAMP_CYCLES 40000
+#define BUCK_RAMP_CYCLES 100000
 
 //----- Buck soft-start ramp state -----
 float Vout_ref = VOUT_REF_START;
@@ -89,11 +90,11 @@ int   buck_ramp_count = 0;
 // regulates against). Seeded at the handover so the first regulated duty
 // equals the preload duty exactly - stepping from the flat 10% preload
 // straight to Vout_ref/Vref would otherwise jump the duty in one cycle.
-// VOUT_SOFT_STEP is per 20kHz cycle: 0.0025 -> 50 V/s, so covering the
-// ~86V from the seed to VOUT_SOFT_FINAL takes about 1.7s.
+// VOUT_SOFT_STEP is per 20kHz cycle: 0.0008 -> 16 V/s, so covering the ~80V
+// from the seed (0.10*Vref, i.e. ~16-20V) to VOUT_SOFT_FINAL takes about 5s.
 #define BUCK_PRELOAD_DUTY 0.10f
 #define VOUT_SOFT_FINAL   100.0f
-#define VOUT_SOFT_STEP    0.0025f
+#define VOUT_SOFT_STEP    0.0008f
 float Vout_soft = 0;
 
 //----- latched protection -----------------------------------------
@@ -102,9 +103,9 @@ int Iin_protectFLAG = 0, Vbus_protectFLAG = 0;
 float Iin_protect_value = 0, Vbus_protect_value = 0;   // snapshot at trip time, for debugging
 
 //----- zero-cross (edge-detected) ----------------------------------
-float theta_prev = 0;
-int   zero_cross_pos = 0, zero_cross_neg = 0;
-int   zc_now = 0, zc_prev = 0, zero_cross_event = 0;
+// Fires once per line cycle, on the POSITIVE-going crossing only - see
+// ZeroCrossDetect(). Everything that starts or stops a stage syncs to it.
+int   zc_armed = 0, zero_cross_event = 0;
 
 //----- startup capture buffer (debug) ------------------------------
 // Arms itself the instant starset_up first goes 0->1 (i.e. the very first
@@ -148,11 +149,13 @@ int   starset_up_prev = 0;
 // existing ~0.7s Ipre_max ramp, so it doesn't slow down normal soft-start.
 #define DUTY_SLEW_MAX 0.01f
 
-// Startup duty_cap floor (see currentloop()) - was 0.30, lowered further to
-// shrink the residual Vo/Vac step still seen at the very first activated
-// cycle even with DUTY_SLEW_MAX in place. Retune if soft-start needs more
-// headroom (too low may stall current buildup near the zero crossing).
-#define DUTY_CAP_START 0.15f
+// Startup duty_cap floor (see currentloop()). duty is the boost's STORING
+// duty, so Vbus = Vac_in/(1-duty): the steady-state need runs from ~0.205 at
+// the line peak (1 - 155/195) up towards 1.0 at the zero crossing. The cap
+// exists to blunt that near-1 demand around the crossing during soft-start,
+// but it has to stay above the peak's 0.205 or there is no reachable
+// operating point at all and the loop just saturates at the floor.
+#define DUTY_CAP_START 0.4f
 float duty_prev_cmd = 0;
 
 //----- Vref startup ramp (see UpdateVref) -----------------------------
@@ -451,7 +454,7 @@ __interrupt void adc_isr(void)
 
     lowpass();
     PLL();
-    ZeroCrossDetect();   // computes zero_cross_pos/neg + zero_cross_event (edge only, fires once per crossing)
+    ZeroCrossDetect();   // zero_cross_event: once per line cycle, positive half-cycle start only
     CheckPLLLock();      // updates PLL_flag - runs every cycle so it's already progressing during the settle window below
 
     if(PLL_flag)
@@ -609,17 +612,25 @@ __interrupt void adc_isr(void)
                 EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;    // both slow-leg arms off through the zero crossing
                 EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
             }
+            // CMPA sets this leg's HIGH-side on-fraction (POLSEL=DB_ACTV_HIC, same as
+            // EPwm3). The boost stores energy through the LOW side, so the boost duty
+            // the control law computes has to be written as its complement - writing
+            // final_duty directly made the plant behave as 1-d, which inverts the
+            // current loop: an over-current lowered duty, which then raised the
+            // inductor volt-seconds instead of lowering them, and the current ran away.
+            // Verified against a captured startup: V_L = Vac_in - d*Vbus fits the
+            // measured di/dt to 3.6V RMS, the un-complemented form misses by 100V.
             else if(b1 > 0)
             {
-                EPwm1Regs.CMPA.half.CMPA = final_duty * 2250;   // was test_duty - undeclared in main.c (that's
-                EPwm1Regs.CMPB = final_duty * 2250;             // test_pll_pwm.c's stand-in var)
+                EPwm1Regs.CMPA.half.CMPA = (1 - final_duty) * 2250;
+                EPwm1Regs.CMPB = (1 - final_duty) * 2250;
                 EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;
                 EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_HIGH;
             }
             else
             {
-                EPwm1Regs.CMPA.half.CMPA = (1 - final_duty) * 2250;
-                EPwm1Regs.CMPB = (1 - final_duty) * 2250;
+                EPwm1Regs.CMPA.half.CMPA = final_duty * 2250;
+                EPwm1Regs.CMPB = final_duty * 2250;
                 EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_HIGH;
                 EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
             }
@@ -645,16 +656,32 @@ __interrupt void adc_isr(void)
 }
 
 
+//==================================================================
+// ZeroCrossDetect - fires once per line cycle, at the start of the POSITIVE
+// half cycle only. It used to fire on both crossings, so a start could land
+// on either half and the current sometimes began from the negative one.
+//
+// Keyed off b1's own sign rather than a PLL phase threshold, so the event
+// coincides exactly with the b1 > 0 branch the slow leg commutates into -
+// no assumption about which phase threshold maps to which half cycle.
+// Arming below -SLOW_LEG_DEAD_V and firing above +SLOW_LEG_DEAD_V gives
+// hysteresis, so noise around the crossing cannot emit several events.
+// Firing at +3V rather than exactly 0 costs nothing: PWM is held off
+// inside |b1| < 5 anyway.
+//==================================================================
 void ZeroCrossDetect(void)
 {
-    zero_cross_pos = (theta_prev < 1.55f && integral1 >= 1.55f);
-    zero_cross_neg = (theta_prev < 4.69f && integral1 >= 4.69f);
+    if(b1 < -SLOW_LEG_DEAD_V)
+    {
+        zc_armed = 1;
+    }
 
-    zc_now = (zero_cross_pos || zero_cross_neg);
-    zero_cross_event = (zc_now && !zc_prev);   // edge only - fires once
-    zc_prev = zc_now;
+    zero_cross_event = (zc_armed && b1 > SLOW_LEG_DEAD_V);
 
-    theta_prev = integral1;
+    if(zero_cross_event)
+    {
+        zc_armed = 0;
+    }
 }
 
 //==================================================================
@@ -736,8 +763,10 @@ void currentloop(void)
     float duty_cap = DUTY_CAP_START + (1.0f - DUTY_CAP_START) * ((Ipre_max - 1.0f) / 7.0f);
     if(duty > duty_cap) duty = duty_cap;
 
-    if(duty >= 0.97) duty = 0.97;
-    if(duty <= 0.03) duty = 0.03;
+    if(duty >= 0.98) duty = 0.98;
+    if(duty <= 0.05) duty = 0.05;   // EPwm1's 50-count dead band swallows anything
+                                    // under 50/2250 = 2.2%, so below that the low-side
+                                    // arm never fires at all - keep clear of that edge
 
     // Slew-rate insurance (see DUTY_SLEW_MAX above) - clamp this cycle's step
     // relative to what was actually commanded last cycle.
@@ -802,7 +831,7 @@ void UpdateVref(void)
 //
 // Vout_soft is seeded at the handover instant so Vout_soft/Vref lands exactly
 // on the preload duty, then walks up from there - the Buck never sees a duty
-// step, it just opens up over ~1.7s. Vref moving with the line envelope is
+// step, it just opens up over ~5s. Vref moving with the line envelope is
 // fine and expected: the Buck's duty should track its own input voltage.
 //==================================================================
 void Busloop(void)
