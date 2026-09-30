@@ -84,6 +84,18 @@ int PLLcount = 0, PLLERRcount = 0;
 float Vout_ref = VOUT_REF_START;
 int   buck_ramp_count = 0;
 
+//----- Buck duty soft-start (see Busloop) -----------------------------
+// The Buck's own target, separate from Vout_ref (which the PFC outer loop
+// regulates against). Seeded at the handover so the first regulated duty
+// equals the preload duty exactly - stepping from the flat 10% preload
+// straight to Vout_ref/Vref would otherwise jump the duty in one cycle.
+// VOUT_SOFT_STEP is per 20kHz cycle: 0.0025 -> 50 V/s, so covering the
+// ~86V from the seed to VOUT_SOFT_FINAL takes about 1.7s.
+#define BUCK_PRELOAD_DUTY 0.10f
+#define VOUT_SOFT_FINAL   100.0f
+#define VOUT_SOFT_STEP    0.0025f
+float Vout_soft = 0;
+
 //----- latched protection -----------------------------------------
 int protectFLAG = 0;
 int Iin_protectFLAG = 0, Vbus_protectFLAG = 0;
@@ -501,6 +513,8 @@ __interrupt void adc_isr(void)
             Vbus_duty = 0;
             buck_ramp_count = 0;
             Vout_ref = VOUT_REF_START;
+            Vout_soft = 0;                   // next handover re-seeds from the preload
+            buck_started = 0;
             Hold();                          // PFC off + reset all PFC control state
             EPwm3Regs.CMPA.half.CMPA = 0;    // Buck fully off (both arms)
             EPwm3Regs.CMPB = 2250;
@@ -781,9 +795,15 @@ void UpdateVref(void)
 }
 
 //==================================================================
-// Busloop - GPIO10 (buck_switch_state) arms Buck at a fixed 10% preload duty;
-// GPIO11 (switch_state) on top of that switches it into closed-form regulation
-// at Vout_ref/Vref. Neither switch on (or PLL not locked) holds Buck fully off.
+// Busloop - GPIO10 (buck_switch_state) arms Buck at a fixed preload duty;
+// GPIO11 (switch_state) on top of that hands over to Vout_soft/Vref, with
+// Vout_soft ramping slowly up to VOUT_SOFT_FINAL. Neither switch on (or PLL
+// not locked) holds Buck fully off.
+//
+// Vout_soft is seeded at the handover instant so Vout_soft/Vref lands exactly
+// on the preload duty, then walks up from there - the Buck never sees a duty
+// step, it just opens up over ~1.7s. Vref moving with the line envelope is
+// fine and expected: the Buck's duty should track its own input voltage.
 //==================================================================
 void Busloop(void)
 {
@@ -797,22 +817,33 @@ void Busloop(void)
         if(!buck_started)
         {
             Vbus_duty = 0;   // GPIO10 already on, but hold off until the next zero crossing
+            Vout_soft = 0;   // re-seed on the next handover
         }
         else if(switch_state == 1)
         {
-            Vbus_duty = Vout_ref / Vref;
+            if(Vout_soft <= 0.0f)
+            {
+                Vout_soft = BUCK_PRELOAD_DUTY * Vref;   // continuous with the preload
+            }
+
+            Vout_soft += VOUT_SOFT_STEP;
+            if(Vout_soft > VOUT_SOFT_FINAL) Vout_soft = VOUT_SOFT_FINAL;
+
+            Vbus_duty = Vout_soft / Vref;
             if(Vbus_duty > 0.90) Vbus_duty = 0.90;
             if(Vbus_duty < 0.10) Vbus_duty = 0.10;
         }
         else
         {
-            Vbus_duty = 0.1;
+            Vbus_duty = BUCK_PRELOAD_DUTY;
+            Vout_soft = 0;   // main switch off again - next handover re-seeds
         }
     }
     else
     {
         buck_started = 0;
         Vbus_duty = 0;
+        Vout_soft = 0;
     }
 }
 
