@@ -1,0 +1,676 @@
+<title>PFC＋Buck 迴路推導</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap">
+<style>
+/* Layout: one reading column (~44rem) for derivations; instruments (Bode, scope traces) widen to 62rem.
+   Palette borrows oscilloscope channel colours (CH1 amber, CH2 cyan, CH3 magenta, CH4 green). */
+:root {
+  --bg: #f3f5f6;
+  --panel: #ffffff;
+  --fg: #16212b;
+  --muted: #5a6875;
+  --rule: #d5dce1;
+  --grid: #e3e8eb;
+  --accent: #0a7f98;
+  --ch1: #b07d00;
+  --ch2: #0a86a1;
+  --ch3: #b02f78;
+  --ch4: #2f7f33;
+  --warn: #b5481f;
+  --warn-bg: #fbece5;
+  --ok-bg: #e8f3ea;
+  --code-bg: #eaeef0;
+  --f-display: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+  --f-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1418; --panel: #141c21; --fg: #dde5ea; --muted: #8d9ba6; --rule: #26323a; --grid: #1f2a31;
+    --accent: #3fc6e0; --ch1: #f0c23a; --ch2: #3fc6e0; --ch3: #f067b3; --ch4: #6bcf68;
+    --warn: #ff8a5c; --warn-bg: #2a1a14; --ok-bg: #14241a; --code-bg: #1b252b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1418; --panel: #141c21; --fg: #dde5ea; --muted: #8d9ba6; --rule: #26323a; --grid: #1f2a31;
+  --accent: #3fc6e0; --ch1: #f0c23a; --ch2: #3fc6e0; --ch3: #f067b3; --ch4: #6bcf68;
+  --warn: #ff8a5c; --warn-bg: #2a1a14; --ok-bg: #14241a; --code-bg: #1b252b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-body); font-size: 16px; line-height: 1.75; }
+.wrap { max-width: 62rem; margin: 0 auto; padding-inline: 20px; padding-block: 28px 80px; }
+.prose { max-width: 44rem; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.3; margin: 0; }
+h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); }
+h2 { font-size: 1.5rem; margin-top: 3.2rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); }
+h3 { font-size: 1.12rem; margin-top: 2rem; }
+p { margin: 0.7rem 0; }
+.eyebrow { font-family: var(--f-mono); font-size: 0.75rem; letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; }
+.sub { color: var(--muted); margin-top: 0.6rem; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--f-mono); font-size: 0.9em; }
+code { background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; }
+.math { overflow-x: auto; overflow-y: hidden; padding: 0.2rem 0; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin-top: 1.2rem; }
+nav.toc a { font-size: 0.85rem; text-decoration: none; color: var(--fg); border: 1px solid var(--rule); padding: 0.15rem 0.6rem; border-radius: 999px; background: var(--panel); }
+nav.toc a:hover, nav.toc a:focus-visible { border-color: var(--accent); color: var(--accent); }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 1rem 1.1rem; margin: 1.2rem 0; }
+.findings { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0.8rem; margin-top: 1.4rem; }
+.finding { background: var(--panel); border: 1px solid var(--rule); border-left: 3px solid var(--warn); padding: 0.8rem 1rem; border-radius: 4px; min-width: 0; }
+.finding.good { border-left-color: var(--ch4); }
+.finding b { display: block; font-size: 0.98rem; margin-bottom: 0.2rem; }
+.finding p { margin: 0; font-size: 0.92rem; color: var(--muted); }
+.callout { border-left: 3px solid var(--accent); background: var(--panel); padding: 0.7rem 1rem; margin: 1.2rem 0; border-radius: 0 4px 4px 0; }
+.callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.figure { margin: 1.4rem 0; }
+.figcap { font-size: 0.85rem; color: var(--muted); margin-top: 0.3rem; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart text { font-family: var(--f-mono); font-size: 11px; fill: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.82rem; color: var(--muted); margin-top: 0.3rem; }
+.legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.legend i { width: 18px; height: 0; border-top: 2px solid; display: inline-block; }
+.legend i.dash { border-top-style: dashed; }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.6rem 1.2rem; margin-bottom: 0.8rem; }
+.ctl { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.85rem; min-width: 0; }
+.ctl label { display: flex; justify-content: space-between; gap: 0.5rem; }
+.ctl output { font-family: var(--f-mono); color: var(--fg); font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; flex-wrap: wrap; }
+.seg button { font: inherit; font-size: 0.82rem; border: 0; background: transparent; color: var(--fg); padding: 0.3rem 0.7rem; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--panel); }
+.seg button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.readout { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.6rem 0 0.2rem; }
+.chip { font-family: var(--f-mono); font-size: 0.8rem; padding: 0.15rem 0.55rem; border-radius: 3px; border: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+.chip.ok { background: var(--ok-bg); border-color: transparent; color: var(--ch4); }
+.chip.bad { background: var(--warn-bg); border-color: transparent; color: var(--warn); }
+.verdict { font-size: 0.9rem; margin-top: 0.4rem; }
+.tablewrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; font-size: 0.88rem; min-width: 30rem; width: 100%; }
+th, td { text-align: left; padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 500; color: var(--muted); font-size: 0.8rem; }
+td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; }
+tr.hl td { background: var(--ok-bg); }
+tr.bad td { color: var(--warn); }
+.twocol { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; }
+.twocol > * { min-width: 0; }
+ol.steps { padding-left: 1.3rem; }
+ol.steps li { margin: 0.35rem 0; }
+ul { padding-left: 1.3rem; }
+li { margin: 0.25rem 0; }
+.assume { font-size: 0.88rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+<header class="prose">
+  <div class="eyebrow">totempolecode · phaselock/main.c @ 87093bc</div>
+  <h1>PFC＋Buck 迴路推導</h1>
+  <p class="sub">從平均模型、小訊號模型一路推到迴路增益，再用整體系統模擬驗證。所有參數取自 repo 裡的程式；假設的部分都有標出來。</p>
+  <nav class="toc" aria-label="章節">
+    <a href="#map">頻率地圖</a><a href="#method">方法</a><a href="#current">PFC 電流環</a><a href="#bus">Bus 耦合</a><a href="#slew">Slew 限制</a><a href="#voltage">PFC 電壓環</a><a href="#buck">Buck</a><a href="#sim">整體模擬</a><a href="#next">下一步</a>
+  </nav>
+</header>
+
+<section id="map">
+  <div class="figure chart" id="freqmap" role="img" aria-label="各迴路與危險頻率在頻率軸上的位置"></div>
+  <p class="figcap">頻率地圖（對數軸）。設計控制器其實就是把每個迴路的頻寬，放在離「危險頻率」夠遠的地方。紅色區域是這次推導找到的衝突：DSP 延遲讓 boost 在 3.3 kHz 以上呈現負電阻，而 bus 的諧振正好落在 2.9–4.2 kHz。</p>
+
+  <div class="findings">
+    <div class="finding"><b>電流環 K = 9.3 卡在穩定邊緣</b><p>單看電流環，K 可以到 33；但 10 µF bus 和 Buck 電感的諧振加上延遲，實際上限只有約 8.5–12。模擬中 K = 10 就失穩。</p></div>
+    <div class="finding"><b>DUTY_SLEW_MAX = 0.01 追不上前饋</b><p>零交越附近前饋每拍要變 0.022。限在 0.01 時 THD 超過 80%；放寬到 ≥ 0.025 後 THD 4.5%、PF 0.998。</p></div>
+    <div class="finding"><b>電壓環 Vki = 0.01 太慢</b><p>頻寬只有 0.006 Hz，負載跳變後 Vo 偏 9 V，要幾十秒才回來。Vkp 0.03、Vki 1 時約 1 秒回到 100 V。</p></div>
+    <div class="finding good"><b>電壓環模型驗證成功</b><p>推導出的線週期平均模型（含一個「虛擬電阻下垂」項）和整體模擬的差距在 0.4 V 以內。</p></div>
+  </div>
+</section>
+
+<section id="method" class="prose">
+  <h2>0　方法：四個步驟</h2>
+  <ol class="steps">
+    <li><b>平均模型（大訊號）</b>：把開關在一個週期內取平均，電感電壓、電容電流寫成以 duty 為變數的方程式。令導數為零，就得到穩態解，也就是前饋。</li>
+    <li><b>線性化（小訊號）</b>：在工作點附近加小擾動，只保留一階項。</li>
+    <li><b>迴路增益</b>：受控體 × 控制器 × 延遲，畫 Bode 圖，讀出相位裕度（PM）與增益裕度（GM）。</li>
+    <li><b>驗證</b>：用時域模擬（這頁是自己寫的平均模型模擬；你可以在 PSIM 用 AC Sweep）比對。</li>
+  </ol>
+  <p>第 2 步唯一的技巧，是處理「兩個變數相乘」的項。以 Buck 的 \(d\cdot V_{bus}\) 為例，令 \(d=D+\hat d\)、\(V_{bus}=V+\hat v\)：</p>
+  <div class="math">\[ d\,V_{bus} = DV + D\hat v + V\hat d + \underbrace{\hat d\,\hat v}_{\text{二階，丟掉}} \]</div>
+  <p>直流項 \(DV\) 回到第 1 步的穩態，剩下的 \(D\hat v + V\hat d\) 就是小訊號。看到 \(V\hat d\) 前面的 \(V\) 了嗎？這就是為什麼受控體增益會跟 \(V_{bus}\) 成正比，也是你兩個控制器都要「除以 \(V_{bus}\)」的原因。</p>
+</section>
+
+<section id="current">
+  <div class="prose">
+  <h2>1　PFC 電流環</h2>
+  <h3>1.1　平均模型與前饋</h3>
+  <p>在整流後的座標裡，totem-pole 就是一個 boost。\(d\) 是儲能開關的 duty（程式裡寫 CMPA 時會取補數，這點註解已經寫清楚）：</p>
+  <div class="math">\[ L\frac{di_L}{dt} = |v_{ac}| - (1-d)\,V_{bus} \]</div>
+  <p>令 \(di_L/dt=0\)，並讓 bus 等於目標 \(V_{ref}\)：</p>
+  <div class="math">\[ d_{ff} = 1-\frac{|v_{ac}|}{V_{ref}} \]</div>
+  <h3>1.2　加上比例控制：「虛擬電阻」</h3>
+  <p>程式的控制律是 \(d = d_{ff} + \dfrac{K}{V_{bus}}(i_{ref}-i_L)\)。把它代回平均模型，\(V_{bus}\) 剛好約掉：</p>
+  <div class="math">\[ L\frac{di_L}{dt} = |v_{ac}|\Big(1-\frac{V_{bus}}{V_{ref}}\Big) + K\,(i_{ref}-i_L) \]</div>
+  <p>這條式子很值得記住，它說了兩件事：</p>
+  <ul>
+    <li>當 \(V_{bus}=V_{ref}\) 時，第一項消失，電流只受 \(K(i_{ref}-i_L)\) 驅動。\(K\) 的單位是 Ω，它就像一顆串在電感上的「虛擬電阻」，時間常數 \(L/K\)，頻寬 \(f_c = K/(2\pi L)\)。</li>
+    <li>當 bus 偏離 \(V_{ref}\) 時，第一項會產生電流誤差。這個項後面在 bus 耦合和電壓環兩節都會再出現。</li>
+  </ul>
+  <h3>1.3　小訊號與迴路增益</h3>
+  <p>擾動 \(\hat d\) 對電流的影響是 \(\hat i_L/\hat d = V_{bus}/(sL)\)，乘上控制器 \(K/V_{bus}\)，再乘上數位延遲。延遲取 \(T_d \approx 1.5\,T_s\)：ADC 取樣後要等一拍才寫入 CMPA，PWM 的零階保持再貢獻半拍。在 20 kHz 下 \(T_d = 75\ \mu s\)：</p>
+  <div class="math">\[ T_i(s)=\frac{K}{sL}\,e^{-sT_d} \qquad\Rightarrow\qquad f_c=\frac{K}{2\pi L},\qquad PM = 90^\circ - 360^\circ f_c T_d \]</div>
+  <div class="callout warn"><b>電感值要確認。</b>程式註解寫 \(L = 1.5658\) mH（量測值，\(K = 2\pi\cdot 945\cdot L\)），而我們先前討論用的是 632 µH。兩者結果差很多：1.566 mH 時 \(f_c\)=947 Hz、PM 64°；632 µH 時 \(f_c\)=2.3 kHz、PM 只有 27°。這頁預設用 1.566 mH，下面可以切換。</div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl"><label for="ci-K">K（虛擬電阻，Ω）<output id="ci-Kv"></output></label><input type="range" id="ci-K" min="1" max="30" step="0.1" value="9.3"></div>
+      <div class="ctl"><label for="ci-Td">延遲 T<sub>d</sub>（µs）<output id="ci-Tdv"></output></label><input type="range" id="ci-Td" min="0" max="125" step="5" value="75"></div>
+      <div class="ctl"><span>PFC 電感 L</span><div class="seg" role="group" aria-label="PFC 電感"><button type="button" id="ci-L1" aria-pressed="true">1.566 mH</button><button type="button" id="ci-L2" aria-pressed="false">632 µH</button></div></div>
+    </div>
+    <div class="twocol">
+      <div class="chart" id="ci-mag"></div>
+      <div class="chart" id="ci-ph"></div>
+    </div>
+    <div class="readout" id="ci-read"></div>
+    <p class="verdict" id="ci-verdict"></p>
+  </div>
+  <p class="prose">PM 公式說明了延遲的代價：每 1 kHz 的頻寬會被 75 µs 的延遲吃掉 27°。在 \(f = 1/(4T_d) = 3.33\) kHz 時延遲剛好貢獻 −90°，加上積分器的 −90°，就是 −180°。<b>單看電流環</b>，K 的上限是讓 \(f_c\) 碰到這個頻率，也就是 \(K_{max}=2\pi L\cdot 3333 \approx 33\)。但下一節會看到，真正的上限低得多。</p>
+</section>
+
+<section id="bus" class="prose">
+  <h2>2　Bus 與 Buck 的耦合（這次最重要的發現）</h2>
+  <h3>2.1　Buck 前饋讓它變成「直流變壓器」</h3>
+  <p><code>Busloop()</code> 用的是 \(d_b = V_o^*/V_{ref}\)。對 Buck 來說，\(V_o = d_b V_{bus}\)，所以在低頻（遠低於 Buck 的 LC 諧振 392 Hz）時：</p>
+  <div class="math">\[ V_{bus} \approx \frac{V_o}{d_b} = V_{ref}\cdot\frac{V_o}{V_o^*} \]</div>
+  <p>只要 \(V_o = V_o^*\)，bus 就自動跟著 \(V_{ref}\) 走。這就是你的 tracking bus 能成立的原因：兩個前饋用同一個 \(V_{ref}\)，彼此是一致的。</p>
+
+  <h3>2.2　從 bus 看進 boost：延遲造成負電阻</h3>
+  <p>現在問：如果 bus 電壓有一個擾動 \(\hat v_{bus}\)，boost 會從 bus 吸收多少電流？線性化 1.1 的平均模型（前饋用 \(V_{ref}\)，不受 \(\hat v_{bus}\) 影響）：</p>
+  <div class="math">\[ sL\,\hat i_L = -(1-D)\,\hat v_{bus} - K e^{-sT_d}\,\hat i_L \quad\Rightarrow\quad \hat i_L = \frac{-(1-D)}{sL + K e^{-sT_d}}\,\hat v_{bus} \]</div>
+  <p>流進 bus 的電流是 \((1-D)\hat i_L\)，所以 boost 從 bus 看進去的等效導納是：</p>
+  <div class="math">\[ Y_{boost}(j\omega) = \frac{(1-D)^2}{j\omega L + K e^{-j\omega T_d}},\qquad \operatorname{Re}\{Y_{boost}\} = \frac{(1-D)^2\,K\cos(\omega T_d)}{|j\omega L + K e^{-j\omega T_d}|^2} \]</div>
+  <p>實部就是等效電導。正的電導會吸收能量（提供阻尼），負的則會注入能量。關鍵在 \(\cos(\omega T_d)\)：</p>
+  <div class="math">\[ \omega T_d > \frac{\pi}{2} \;\Longleftrightarrow\; f > \frac{1}{4T_d} = 3.33\ \text{kHz} \quad\Rightarrow\quad \text{boost 變成負電阻，而且 } K \text{ 越大越負} \]</div>
+
+  <h3>2.3　Bus 的諧振剛好落在那裡</h3>
+  <p>10 µF 的 bus 電容，和 Buck 電感 75 µH 折算到 bus 側（除以 \(d_b^2\)）形成諧振。2200 µF 對這個頻率來說等於短路：</p>
+  <div class="math">\[ f_{bus} = \frac{1}{2\pi\sqrt{(L_b/d_b^2)\,C_{bus}}} = \frac{d_b}{2\pi\sqrt{L_b C_{bus}}} \]</div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>V<sub>ref</sub></th><th>d<sub>b</sub> = 100/V<sub>ref</sub></th><th>f<sub>bus</sub></th><th>boost 在此頻率</th></tr></thead>
+    <tbody>
+      <tr><td class="num">140 V（零交越附近）</td><td class="num">0.714</td><td class="num">4.15 kHz</td><td>負電阻</td></tr>
+      <tr><td class="num">170 V</td><td class="num">0.588</td><td class="num">3.42 kHz</td><td>接近零，略負</td></tr>
+      <tr><td class="num">203 V（峰值）</td><td class="num">0.493</td><td class="num">2.86 kHz</td><td>正電阻，但很小</td></tr>
+    </tbody>
+  </table></div>
+  <p>諧振本身只有寄生電阻提供一點阻尼，boost 再注入負電阻，K 一大就壓不住。我把整個線性系統（boost 電感、bus、Buck 電感、輸出電容，加上一拍延遲）在不同的瞬時 \(|v_{ac}|\) 凍結，算離散系統特徵值，找出開始不穩定的 K：</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>|v<sub>ac</sub>|</th><th>L = 1.566 mH 時 K<sub>max</sub></th><th>L = 632 µH 時 K<sub>max</sub></th></tr></thead>
+    <tbody>
+      <tr><td class="num">20 V</td><td class="num">10.3</td><td class="num">4.3</td></tr>
+      <tr><td class="num">60 V</td><td class="num">9.5</td><td class="num">3.5</td></tr>
+      <tr class="bad"><td class="num">100 V</td><td class="num">8.5</td><td class="num">2.8</td></tr>
+      <tr><td class="num">130 V</td><td class="num">8.8</td><td class="num">—</td></tr>
+      <tr><td class="num">163 V（峰值）</td><td class="num">12.0</td><td class="num">3.8</td></tr>
+      <tr><td>單看電流環</td><td class="num">≈ 33</td><td class="num">≈ 13</td></tr>
+    </tbody>
+  </table></div>
+  <p>整體時域模擬也吻合：L = 1.566 mH 時，K = 9.3 可以運作（THD 4.5%），K = 10 就失穩（THD 38%）。K = 9.3 在 |v<sub>ac</sub>| ≈ 100 V 那一段其實已經略微超過凍結分析的上限，只是那段時間很短，系統還來不及發散。</p>
+  <div class="callout"><b>設計上的選項（未修改程式，供你評估）</b>
+    <ul>
+      <li>把 K 降到 6–7：模擬 THD 分別為 6.6%、5.8%，換來足夠的穩定裕度。</li>
+      <li>縮短延遲：例如提早 ADC 觸發、或用 ePWM 的立即載入，讓 \(1/(4T_d)\) 往高頻移。</li>
+      <li>在 bus 加 RC 阻尼，或加大 bus 電容讓 \(f_{bus}\) 降到 3.3 kHz 以下。這兩項我沒有模擬，要再驗證，而且加大電容會影響 tracking 的效果。</li>
+    </ul>
+  </div>
+</section>
+
+<section id="slew" class="prose">
+  <h2>3　Duty 斜率限制</h2>
+  <p>前饋在零交越附近變化最快。對 \(d_{ff}=1-|v_{ac}|/V_{ref}\) 微分（零交越附近 \(V_{ref}=140\) V）：</p>
+  <div class="math">\[ \left|\frac{d\,d_{ff}}{dt}\right|_{max} = \frac{\omega V_m}{V_{ref}} = \frac{377\times 163}{140} = 439\ \text{s}^{-1} \;\Rightarrow\; 439\times 50\,\mu s = 0.022\ \text{每拍} \]</div>
+  <p><code>DUTY_SLEW_MAX = 0.01</code> 只有需求的一半。duty 跟不上時，\((1-d)V_{bus}\) 會小於 \(|v_{ac}|\)，電感電流就會一路衝上去。這個限制原本是為了啟動保護（註解寫得很清楚），但它在正常運轉時也一直在作用。</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>slew 上限（每拍）</th><th>THD</th><th>PF</th><th>結果</th></tr></thead>
+    <tbody>
+      <tr class="bad"><td class="num">0.010（現行）</td><td class="num">86%</td><td class="num">0.21</td><td>崩潰</td></tr>
+      <tr class="bad"><td class="num">0.015</td><td class="num">101%</td><td class="num">0.45</td><td>崩潰</td></tr>
+      <tr class="bad"><td class="num">0.020</td><td class="num">42%</td><td class="num">0.88</td><td>邊緣</td></tr>
+      <tr class="hl"><td class="num">0.025</td><td class="num">4.4%</td><td class="num">0.998</td><td>正常</td></tr>
+      <tr><td class="num">無限制</td><td class="num">4.5%</td><td class="num">0.998</td><td>正常</td></tr>
+    </tbody>
+  </table></div>
+  <p class="assume">（L = 1.566 mH、K = 9.3、含一拍延遲、500 W。如果只想保留啟動保護，可以只在 soft-start 期間套用 0.01，進入穩態後放寬到 0.03 以上。）</p>
+</section>
+
+<section id="voltage">
+  <div class="prose">
+  <h2>4　PFC 電壓環</h2>
+  <h3>4.1　為什麼要對 line cycle 取平均</h3>
+  <p>電壓環每個 line cycle 只更新一次 \(I_{pre}\)，它看不到一個週期內的變化，所以受控體要寫成「一個 line cycle 的平均功率」。能量存在 2200 µF 上（10 µF 的 bus 只存 0.14 J，在 500 W 下只撐 0.29 ms）：</p>
+  <div class="math">\[ C_oV_o\frac{dV_o}{dt} = \overline{p_{in}} - P_{load} \]</div>
+  <h3>4.2　輸入功率：比預期多一項</h3>
+  <p>電流由兩部分組成：參考值 \(I_{pre}|\sin\omega t|\)，以及 1.2 節「虛擬電阻」式子裡由 bus 偏差產生的那一項。把 2.1 的 \(V_{bus}=V_{ref}V_o/V_o^*\) 代入：</p>
+  <div class="math">\[ i_L = I_{pre}|\sin\omega t| + \frac{|v_{ac}|}{K}\cdot\frac{V_o^*-V_o}{V_o^*} \]</div>
+  <p>乘上 \(|v_{ac}|\) 再對一個週期取平均（\(\overline{\sin^2}=1/2\)）：</p>
+  <div class="math">\[ \overline{p_{in}} = \frac{V_m I_{pre}}{2} + \frac{V_m^2}{2K}\cdot\frac{V_o^*-V_o}{V_o^*} \]</div>
+  <p>第二項是一個「下垂」：Vo 偏高時輸入功率自動減少。即使電壓環完全不動，系統本身也會穩在某個電壓，只是有穩態誤差。這一項是電流環的 K 帶來的，以前的推導（只有 \(V_mI_{pre}/2\)）會漏掉它。</p>
+  <h3>4.3　線性化</h3>
+  <div class="math">\[ G_v(s)=\frac{\hat v_o}{\hat i_{pre}} = \frac{V_m/2}{C_oV_o\,s + G_d},\qquad G_d = \underbrace{\frac{V_m^2}{2KV_o^*}}_{\text{下垂}=14.3\ \text{W/V}} + \underbrace{\frac{\partial P_{load}}{\partial V_o}}_{\text{電阻負載 }2V_o/R} \]</div>
+  <p>電阻負載 20 Ω 時 \(G_d = 14.3+10 = 24.3\) W/V，極點在 \(G_d/(2\pi C_oV_o) = 17.6\) Hz。如果 WPT 搭配定電壓控制後比較像定功率負載，第二項為 0，極點降到 10.3 Hz。</p>
+  <h3>4.4　量測低通與取樣</h3>
+  <p><code>lowpass()</code> 每拍執行 \(V_{f} \mathrel{+}= z(V_o - V_f)\)，\(z=0.001568\)，等效時間常數 \(\tau = T_s/z = 31.9\) ms，也就是 5 Hz 的一階低通。</p>
+  <p>取樣固定在每個週期的同一個相位（<code>integral1</code> ≈ 4.71 rad）。120 Hz 漣波在取樣點的值為 \(\cos(2\omega t_0 + 2\omega k/60) = \cos(2\omega t_0)\)，每次都一樣，所以漣波被取樣成一個固定偏移，<b>不會</b>傳進 \(I_{pre}\) 造成三次諧波。這就是不需要額外 notch filter 的原因。</p>
+  <h3>4.5　z 域迴路增益</h3>
+  <p>受控體連同低通寫成 \(G(s)=\dfrac{k}{(s+a)(s+b)}\)，其中 \(k=\dfrac{V_m}{2C_oV_o\tau}\)、\(a=\dfrac{G_d}{C_oV_o}\)、\(b=\dfrac1\tau\)。用零階保持離散化（\(T=1/60\) s），部分分式展開後：</p>
+  <div class="math">\[ G(z) = \frac{k}{ab} + (1-z^{-1})\left[\frac{k/(a(a-b))}{1-e^{-aT}z^{-1}} + \frac{k/(b(b-a))}{1-e^{-bT}z^{-1}}\right] \]</div>
+  <p>程式的速度型 PI：\(I_{pre}[n]=I_{pre}[n-1]+K_p(V_e[n]-V_e[n-1])+K_i T\,V_e[n]\)，等價於</p>
+  <div class="math">\[ C(z) = K_p + \frac{K_i T}{1-z^{-1}} \]</div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl"><label for="vl-kp">Vkp<output id="vl-kpv"></output></label><input type="range" id="vl-kp" min="0" max="0.3" step="0.005" value="0.03"></div>
+      <div class="ctl"><label for="vl-ki">Vki<output id="vl-kiv"></output></label><input type="range" id="vl-ki" min="0" max="5" step="0.01" value="1"></div>
+      <div class="ctl"><span>負載型態</span><div class="seg" role="group" aria-label="負載型態"><button type="button" id="vl-R" aria-pressed="true">電阻 20 Ω</button><button type="button" id="vl-P" aria-pressed="false">定功率</button></div></div>
+      <div class="ctl"><span>快速設定</span><div class="seg" role="group" aria-label="增益預設"><button type="button" data-v="0.1,0.01">現行</button><button type="button" data-v="0.03,1">建議</button><button type="button" data-v="0.1,2">較快</button></div></div>
+    </div>
+    <div class="twocol">
+      <div class="chart" id="vl-mag"></div>
+      <div class="chart" id="vl-ph"></div>
+    </div>
+    <div class="readout" id="vl-read"></div>
+    <p class="figcap">橫軸到 30 Hz 為止，也就是 60 Hz 取樣的 Nyquist 頻率。</p>
+  </div>
+
+  <div class="prose">
+  <h3>4.6　模型對不對？和整體模擬比對</h3>
+  <p>1 s 時負載從 500 W 降到 250 W（20 → 40 Ω），5 s 時恢復。實線是整體系統模擬（逐拍執行你的控制程式），虛線是 4.2 的線週期平均模型：</p>
+  </div>
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl"><span>增益</span><div class="seg" role="group" aria-label="步階響應增益"><button type="button" id="vs-g1" aria-pressed="false">現行 0.1 / 0.01</button><button type="button" id="vs-g2" aria-pressed="true">建議 0.03 / 1</button><button type="button" id="vs-g3" aria-pressed="false">較快 0.1 / 2</button></div></div>
+    </div>
+    <div class="twocol">
+      <div class="chart" id="vs-vo"></div>
+      <div class="chart" id="vs-ip"></div>
+    </div>
+    <div class="legend"><span><i style="border-color:var(--ch2)"></i>整體模擬</span><span><i class="dash" style="border-color:var(--ch1)"></i>平均模型</span></div>
+  </div>
+  <p class="prose">兩者差距在 0.4 V 以內，代表 4.2 的推導（包含下垂項）抓到了正確的物理。用現行的 0.1 / 0.01，Vo 跳到約 109 V 後幾乎不動；這 9 V 主要是下垂項造成的，積分器太弱，拉不回來。另外注意程式把 <code>Ipre_prev</code> 存在限幅<b>之前</b>，碰到上下限時積分器會繼續累積（windup），加大 Vki 後建議把它移到限幅之後。</p>
+</section>
+
+<section id="buck">
+  <div class="prose">
+  <h2>5　Buck（如果要改成閉迴路）</h2>
+  <p>目前 Buck 是開迴路前饋，這是對的分工：能量平衡交給 PFC 電壓環，Buck 只當直流變壓器。這一節是給你未來考慮讓 Buck 閉迴路時用的。</p>
+  <h3>5.1　受控體（含寄生電阻）</h3>
+  <div class="math">\[ G_{vd}(s) = V_{bus}\,\frac{Z_p}{sL_b + r_L + Z_p},\qquad Z_p = R\;\Big\|\;\Big(r_C+\frac{1}{sC_o}\Big) \]</div>
+  <p>近似成二階形式時：</p>
+  <div class="math">\[ f_0 = \frac{1}{2\pi\sqrt{L_bC_o}} = 392\ \text{Hz},\qquad \frac{1}{Q}\approx \frac{Z_0}{R} + \frac{r_L+r_C}{Z_0},\qquad Z_0=\sqrt{L_b/C_o}=0.185\ \Omega \]</div>
+  <p>因為 \(Z_0\) 很小，負載電阻幾乎不提供阻尼（\(Z_0/R=0.009\)），Q 值完全由寄生電阻決定：理想元件時 Q ≈ 108，加上 \(r_L+r_C=50\) mΩ 後 Q ≈ 3.6。另有一個 ESR 零點 \(f_z = 1/(2\pi r_C C_o) = 3.6\) kHz。</p>
+  <h3>5.2　符號與裕度</h3>
+  <p>控制器 \(C(s)=\pm(K_p+K_i/s)/V_{bus}\)。用下面的切換鍵比較「+」與「−」：「−」等於整條相位平移 180°，諧振頻帶的正回授會被翻成負回授（所以理想元件時看起來收斂），但直流變成正回授。</p>
+  </div>
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl"><label for="bk-kp">Kp（正規化）<output id="bk-kpv"></output></label><input type="range" id="bk-kp" min="0" max="1" step="0.005" value="0.05"></div>
+      <div class="ctl"><label for="bk-ki">Ki<output id="bk-kiv"></output></label><input type="range" id="bk-ki" min="0" max="400" step="5" value="100"></div>
+      <div class="ctl"><label for="bk-r">r<sub>C</sub> + r<sub>L</sub>（mΩ）<output id="bk-rv"></output></label><input type="range" id="bk-r" min="0" max="150" step="1" value="50"></div>
+      <div class="ctl"><span>控制器符號</span><div class="seg" role="group" aria-label="控制器符號"><button type="button" id="bk-plus" aria-pressed="true">＋</button><button type="button" id="bk-minus" aria-pressed="false">−</button></div></div>
+    </div>
+    <div class="twocol">
+      <div class="chart" id="bk-mag"></div>
+      <div class="chart" id="bk-ph"></div>
+    </div>
+    <div class="readout" id="bk-read"></div>
+    <p class="verdict" id="bk-verdict"></p>
+  </div>
+  <div class="prose">
+  <p>時域驗證（V<sub>bus</sub> 固定 170 V、100 ms 時負載加倍、一拍延遲）：</p>
+  </div>
+  <div class="twocol">
+    <div class="panel"><div class="chart" id="bt-a"></div><div class="legend"><span><i style="border-color:var(--ch3)"></i>＋，Kp = 0.3</span><span><i style="border-color:var(--ch2)"></i>−，Kp = 0.3</span></div><p class="figcap">理想元件、只有 P。＋號在 392 Hz 振盪發散；−號反而很平。這就是你在 PSIM 看到的現象。</p></div>
+    <div class="panel"><div class="chart" id="bt-b"></div><div class="legend"><span><i style="border-color:var(--ch4)"></i>＋，PI</span><span><i style="border-color:var(--warn)"></i>−，PI</span></div><p class="figcap">含 ESR/DCR、Kp = 0.05、Ki = 100。＋號穩定且零穩態誤差；−號因為積分器在正回授裡，Vo 直接崩到 0。</p></div>
+  </div>
+  <div class="prose">
+  <p>如果真的要讓 Buck 閉迴路，頻寬必須遠低於 120 Hz，讓 Vo 保留 120 Hz 漣波（<b>振幅 3 V、峰對峰 6 V</b>，先前我說成峰對峰 3 V，在此更正）。而且 PFC 電壓環就不能再積分 Vo，否則兩個積分器會搶同一個能量狀態。WPT 的定電壓回授，建議接到 <code>Vout_ref</code>。</p>
+  </div>
+</section>
+
+<section id="sim">
+  <div class="prose">
+  <h2>6　整體系統模擬</h2>
+  <p>模型：整流座標的 boost（L、DCR 50 mΩ）→ 10 µF bus → 同步 Buck（75 µH、30 mΩ）→ 2200 µF（ESR 20 mΩ）→ 電阻負載。控制部分照抄 <code>phaselock/main.c</code>：20 kHz 取樣、一拍延遲、零交越 |b1| &lt; 5 V 時兩臂關閉（電流只能經二極體單向流）、電壓環每週期一次、duty 限幅與斜率限制。開關以平均模型表示，PLL 與感測器視為理想，RK4 積分。</p>
+  </div>
+  <div class="panel">
+    <div class="controls">
+      <div class="ctl"><span>情境</span><div class="seg" role="group" aria-label="模擬情境"><button type="button" id="sw-ok" aria-pressed="true">slew 放寬（≥ 0.025）</button><button type="button" id="sw-bad" aria-pressed="false">slew = 0.01（現行）</button></div></div>
+    </div>
+    <div class="twocol">
+      <div><div class="chart" id="sw-i"></div><div class="legend"><span><i style="border-color:var(--ch2)"></i>i<sub>in</sub></span><span><i class="dash" style="border-color:var(--ch3)"></i>i<sub>ref</sub></span><span><i style="border-color:var(--ch1)"></i>v<sub>ac</sub> ÷ 25</span></div></div>
+      <div><div class="chart" id="sw-v"></div><div class="legend"><span><i style="border-color:var(--ch2)"></i>V<sub>bus</sub></span><span><i class="dash" style="border-color:var(--ch3)"></i>V<sub>ref</sub></span><span><i style="border-color:var(--ch4)"></i>V<sub>o</sub></span></div></div>
+    </div>
+    <p class="figcap" id="sw-cap"></p>
+  </div>
+  <div class="prose">
+  <h3>延遲的影響：PSIM 可能太樂觀</h3>
+  <p>PSIM 的 C-block 如果沒有接取樣保持或單位延遲，等於沒有 DSP 的一拍延遲。下表「無延遲」那一欄就是這種情況，看起來永遠比實際 DSP 好：</p>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>L</th><th>slew</th><th>延遲</th><th>THD</th><th>PF</th><th>Vo 峰對峰</th></tr></thead>
+    <tbody>
+      <tr class="bad"><td>1.566 mH</td><td>0.01</td><td>一拍</td><td class="num">86%</td><td class="num">0.21</td><td class="num">68 V</td></tr>
+      <tr class="bad"><td>1.566 mH</td><td>0.01</td><td>無</td><td class="num">88%</td><td class="num">0.21</td><td class="num">61 V</td></tr>
+      <tr class="hl"><td>1.566 mH</td><td>放寬</td><td>一拍</td><td class="num">4.5%</td><td class="num">0.998</td><td class="num">6.0 V</td></tr>
+      <tr><td>1.566 mH</td><td>放寬</td><td>無</td><td class="num">3.8%</td><td class="num">0.999</td><td class="num">6.0 V</td></tr>
+      <tr class="bad"><td>632 µH</td><td>放寬</td><td>一拍</td><td class="num">117%</td><td class="num">0.30</td><td class="num">25 V</td></tr>
+      <tr><td>632 µH</td><td>放寬</td><td>無</td><td class="num">4.0%</td><td class="num">0.999</td><td class="num">5.9 V</td></tr>
+      <tr><td>632 µH，K = 3</td><td>放寬</td><td>一拍</td><td class="num">13%</td><td class="num">0.96</td><td class="num">—</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">632 µH 那兩列最能說明問題：沒有延遲時一切正常，加上一拍延遲就整個失穩。如果你的 PSIM 模型用的是 632 µH 而且看起來沒問題，請在 C-block 的輸出加一個單位延遲再跑一次。</p>
+</section>
+
+<section id="next" class="prose">
+  <h2>7　頻寬分層與下一步</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>迴路</th><th>負責的量</th><th>頻寬</th><th>要避開</th></tr></thead>
+    <tbody>
+      <tr><td>PFC 電流環</td><td>輸入電流形狀</td><td class="num">≈ 950 Hz</td><td>bus 諧振 2.9–4.2 kHz、延遲 3.3 kHz</td></tr>
+      <tr><td>Boost／Buck 前饋</td><td>V<sub>bus</sub> 追 V<sub>ref</sub>、Buck 比例</td><td class="num">開迴路</td><td>—</td></tr>
+      <tr><td>PFC 電壓環</td><td>V<sub>o</sub> 的能量平衡</td><td class="num">0.5–1 Hz（建議）</td><td>120 Hz 漣波、60 Hz 取樣</td></tr>
+      <tr><td>WPT 定電壓（nRF）</td><td>V<sub>out_ref</sub> 設定值</td><td class="num">≪ 0.5 Hz</td><td>電壓環頻寬</td></tr>
+    </tbody>
+  </table></div>
+  <ol class="steps">
+    <li>確認 PFC 電感實際值（1.566 mH 或 632 µH），K 的上限差了三倍。</li>
+    <li>PSIM 裡加入：C-block 輸出單位延遲、Buck 與 bus 電容的 ESR、電感 DCR。</li>
+    <li>把 <code>DUTY_SLEW_MAX</code> 在穩態放寬到 0.03 以上，觀察零交越附近的電流。</li>
+    <li>電壓環試 Vkp = 0.03、Vki = 1，並把 <code>Ipre_prev</code> 改成存限幅後的值。</li>
+    <li>用 PSIM 的 AC Sweep 量 \(\hat v_o/\hat i_{pre}\)，和 4.3 的 \(G_v(s)\) 比對。</li>
+  </ol>
+  <p class="assume">假設：V<sub>m</sub> = 163 V（115 V<sub>rms</sub>）、V<sub>o</sub><sup>*</sup> = 100 V、500 W 電阻負載 20 Ω、r<sub>C</sub> = 20 mΩ、r<sub>L</sub> = 30 mΩ、boost DCR 50 mΩ、T<sub>d</sub> = 1.5 T<sub>s</sub>。WPT 級等效成電阻；實際 LCC 的輸入阻抗會改變 Buck 的 Q 值與電壓環的 G<sub>d</sub>。</p>
+</section>
+</div>
+
+<script>
+window.MathJax = { tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] }, svg: { fontCache: 'global' }, options: { enableMenu: false } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js" async></script>
+<script>
+const DATA = {"ok":{"vac":[1.022,7.151,13.269,19.369,25.442,31.478,37.469,43.407,49.284,55.09,60.819,66.46,72.008,77.453,82.788,88.005,93.097,98.057,102.878,107.552,112.074,116.436,120.633,124.658,128.507,132.172,135.65,138.935,142.023,144.908,147.588,150.058,152.315,154.356,156.177,157.776,159.151,160.3,161.221,161.913,162.375,162.606,162.606,162.375,161.913,161.221,160.3,159.151,157.776,156.177,154.356,152.315,150.058,147.588,144.908,142.023,138.935,135.65,132.172,128.507,124.658,120.633,116.436,112.074,107.552,102.878,98.057,93.097,88.005,82.788,77.453,72.008,66.46,60.819,55.09,49.284,43.407,37.469,31.478,25.442,19.369,13.269,7.151,1.022,-5.108,-11.232,-17.339,-23.421,-29.47,-35.478,-41.435,-47.333,-53.163,-58.918,-64.59,-70.17,-75.65,-81.022,-86.279,-91.414,-96.419,-101.287,-106.011,-110.584,-115.0,-119.253,-123.336,-127.244,-130.971,-134.512,-137.862,-141.016,-143.969,-146.718,-149.259,-151.587,-153.7,-155.594,-157.268,-158.718,-159.942,-160.939,-161.708,-162.246,-162.554,-162.631,-162.477,-162.092,-161.477,-160.632,-159.559,-158.259,-156.735,-154.987,-153.02,-150.835,-148.435,-145.825,-143.007,-139.986,-136.767,-133.353,-129.749,-125.961,-121.994,-117.854,-113.546,-109.077,-104.452,-99.68,-94.766,-89.717,-84.54,-79.244,-73.835,-68.32,-62.709,-57.009,-51.228,-45.374,-39.455,-33.48,-27.458,-21.397,-15.305,-9.192,-3.065],"iin":[-0.215,0.0,0.151,0.656,1.054,1.325,1.581,1.81,2.054,2.297,2.522,2.775,2.986,3.231,3.445,3.66,3.887,4.068,4.296,4.501,4.668,4.814,5.026,5.139,5.311,5.47,5.547,5.715,5.817,5.867,6.014,6.071,6.087,6.206,6.232,6.207,6.294,6.301,6.231,6.281,6.282,6.172,6.175,6.177,6.04,5.99,5.992,5.841,5.74,5.734,5.582,5.438,5.418,5.263,5.091,5.056,4.89,4.707,4.658,4.464,4.294,4.221,3.991,3.864,3.727,3.5,3.402,3.204,3.067,2.838,2.685,2.487,2.29,2.117,1.89,1.714,1.489,1.286,1.073,0.846,0.634,0.4,0.175,-0.083,-0.0,-0.087,-0.521,-0.95,-1.242,-1.497,-1.734,-1.97,-2.22,-2.443,-2.694,-2.915,-3.148,-3.378,-3.583,-3.818,-4.003,-4.224,-4.426,-4.628,-4.752,-4.963,-5.106,-5.241,-5.434,-5.515,-5.653,-5.801,-5.839,-5.963,-6.069,-6.069,-6.165,-6.242,-6.202,-6.26,-6.319,-6.245,-6.254,-6.303,-6.205,-6.158,-6.196,-6.089,-5.987,-6.006,-5.903,-5.752,-5.745,-5.65,-5.465,-5.428,-5.336,-5.128,-5.069,-4.967,-4.747,-4.678,-4.547,-4.326,-4.259,-4.075,-3.885,-3.798,-3.559,-3.44,-3.262,-3.12,-2.916,-2.727,-2.568,-2.341,-2.188,-1.96,-1.775,-1.568,-1.347,-1.151,-0.917,-0.708,-0.478,-0.249,-0.022],"iref":[0.04,0.277,0.514,0.75,0.985,1.218,1.45,1.68,1.908,2.133,2.354,2.573,2.788,2.998,3.205,3.407,3.604,3.796,3.982,4.163,4.338,4.507,4.67,4.826,4.975,5.117,5.251,5.378,5.498,5.61,5.713,5.809,5.896,5.975,6.046,6.108,6.161,6.205,6.241,6.268,6.286,6.295,6.295,6.286,6.268,6.241,6.205,6.161,6.108,6.046,5.975,5.896,5.809,5.713,5.61,5.498,5.378,5.251,5.117,4.975,4.826,4.67,4.507,4.338,4.163,3.982,3.796,3.604,3.407,3.205,2.998,2.788,2.573,2.354,2.133,1.908,1.68,1.45,1.218,0.985,0.75,0.514,0.277,0.04,-0.198,-0.435,-0.671,-0.907,-1.141,-1.373,-1.604,-1.832,-2.058,-2.281,-2.5,-2.716,-2.929,-3.136,-3.34,-3.539,-3.732,-3.921,-4.104,-4.281,-4.452,-4.616,-4.774,-4.926,-5.07,-5.207,-5.337,-5.459,-5.573,-5.68,-5.778,-5.868,-5.95,-6.023,-6.088,-6.144,-6.192,-6.23,-6.26,-6.281,-6.293,-6.296,-6.29,-6.275,-6.251,-6.219,-6.177,-6.127,-6.068,-6.0,-5.924,-5.839,-5.746,-5.645,-5.536,-5.419,-5.295,-5.162,-5.023,-4.876,-4.723,-4.562,-4.396,-4.223,-4.044,-3.859,-3.669,-3.473,-3.273,-3.068,-2.858,-2.645,-2.428,-2.207,-1.983,-1.757,-1.527,-1.296,-1.063,-0.828,-0.593,-0.356,-0.119],"Vbus":[140.367,138.61,140.149,138.16,139.188,138.401,137.787,138.647,136.93,138.251,136.902,137.291,137.31,136.379,137.522,136.054,137.222,136.386,136.598,139.617,145.986,148.818,153.784,158.514,160.884,166.458,169.522,172.116,177.369,179.402,181.889,186.636,188.0,189.931,194.204,195.118,196.121,199.886,200.566,200.404,203.473,204.128,202.759,204.826,205.568,203.139,203.918,204.688,201.439,200.806,201.408,197.503,195.575,195.785,191.188,188.327,187.95,182.408,179.257,177.95,171.234,168.748,165.452,158.329,156.879,149.941,145.564,143.075,143.828,143.939,142.369,144.315,141.696,143.537,142.032,141.947,142.6,140.598,142.386,140.236,141.147,140.593,139.618,140.722,138.749,139.933,138.719,138.744,138.945,137.609,138.737,137.226,137.924,137.42,136.935,137.626,136.349,137.418,136.389,136.832,136.816,136.256,138.146,144.024,148.109,151.64,157.517,159.792,164.499,168.997,170.784,175.749,179.106,180.569,185.257,187.9,188.8,192.953,195.219,195.32,198.697,200.832,200.054,202.352,204.48,202.937,203.852,205.915,203.851,203.206,204.983,202.623,200.445,201.677,199.076,195.57,196.123,193.094,188.566,188.517,184.613,179.525,179.032,173.569,168.86,167.521,160.125,157.327,152.97,145.957,144.314,142.693,144.927,141.97,144.291,142.392,142.636,143.211,141.098,143.246,140.638,142.044,141.123,140.322,141.501,139.22,140.896],"Vref":[140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,142.878,147.552,152.074,156.436,160.633,164.658,168.507,172.172,175.65,178.935,182.023,184.908,187.588,190.058,192.315,194.356,196.177,197.776,199.151,200.3,201.221,201.913,202.375,202.606,202.606,202.375,201.913,201.221,200.3,199.151,197.776,196.177,194.356,192.315,190.058,187.588,184.908,182.023,178.935,175.65,172.172,168.507,164.658,160.633,156.436,152.074,147.552,142.878,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,141.287,146.011,150.584,155.0,159.253,163.336,167.244,170.971,174.512,177.862,181.016,183.969,186.718,189.259,191.587,193.7,195.594,197.268,198.718,199.942,200.939,201.708,202.246,202.554,202.631,202.477,202.092,201.477,200.632,199.559,198.259,196.735,194.987,193.02,190.835,188.435,185.825,183.007,179.986,176.767,173.353,169.749,165.961,161.994,157.854,153.546,149.077,144.452,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0],"Vo":[99.856,99.63,99.398,99.191,98.96,98.769,98.56,98.373,98.199,98.019,97.877,97.722,97.604,97.489,97.391,97.321,97.249,97.22,97.185,97.154,97.128,97.148,97.153,97.203,97.267,97.328,97.439,97.545,97.66,97.82,97.967,98.124,98.323,98.504,98.69,98.917,99.123,99.324,99.565,99.787,99.991,100.232,100.461,100.657,100.883,101.108,101.288,101.488,101.698,101.856,102.021,102.205,102.334,102.461,102.61,102.701,102.789,102.898,102.944,102.995,103.058,103.052,103.076,103.075,103.03,103.024,102.946,102.874,102.742,102.636,102.494,102.342,102.197,102.007,101.849,101.643,101.455,101.252,101.03,100.831,100.592,100.385,100.152,99.926,99.709,99.472,99.264,99.035,98.834,98.632,98.432,98.26,98.075,97.927,97.773,97.642,97.529,97.42,97.347,97.27,97.23,97.196,97.169,97.131,97.143,97.152,97.181,97.25,97.304,97.4,97.514,97.617,97.767,97.922,98.067,98.257,98.448,98.624,98.841,99.059,99.254,99.484,99.72,99.921,100.149,100.391,100.592,100.804,101.04,101.231,101.417,101.634,101.808,101.962,102.149,102.298,102.413,102.565,102.679,102.754,102.867,102.936,102.972,103.045,103.057,103.063,103.088,103.04,103.03,102.979,102.903,102.79,102.668,102.552,102.385,102.256,102.067,101.904,101.717,101.512,101.329,101.098,100.904,100.672,100.452,100.236,99.995],"ib":[0.372,-0.14,0.047,0.271,-0.028,0.725,0.288,0.925,0.948,1.1,1.712,1.513,2.355,2.263,2.864,3.226,3.397,4.185,4.11,4.126,4.576,5.281,5.102,6.126,6.217,6.413,7.385,7.186,7.617,8.425,8.1,8.565,9.278,8.861,9.213,9.91,9.425,9.552,10.272,9.782,9.604,10.331,9.927,9.418,10.082,9.847,9.048,9.565,9.53,8.524,8.854,8.987,7.851,8.032,8.25,7.016,7.183,7.348,6.027,6.399,6.241,4.993,5.719,4.799,4.287,4.779,3.302,3.421,2.255,2.855,1.814,1.976,1.699,1.064,1.532,0.505,1.049,0.408,0.362,0.512,-0.151,0.462,-0.217,0.172,0.078,-0.132,0.343,-0.076,0.584,0.388,0.679,1.029,0.92,1.634,1.477,2.12,2.303,2.594,3.21,3.218,4.03,4.061,4.294,4.206,5.248,5.048,5.755,6.344,6.159,7.157,7.321,7.298,8.295,8.236,8.248,9.185,9.028,8.931,9.809,9.645,9.334,10.13,10.051,9.485,10.133,10.217,9.426,9.837,10.119,9.192,9.299,9.754,8.787,8.591,9.16,8.2,7.776,8.402,7.413,6.91,7.55,6.407,6.079,6.606,5.207,5.431,5.384,4.085,4.923,3.657,3.656,2.44,2.688,2.297,1.644,2.136,0.942,1.614,0.754,0.792,0.832,0.084,0.751,-0.151,0.348,0.055,-0.13],"t":[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9,3.0,3.1,3.2,3.3,3.4,3.5,3.6,3.7,3.8,3.9,4.0,4.1,4.2,4.3,4.4,4.5,4.6,4.7,4.8,4.9,5.0,5.1,5.2,5.3,5.4,5.5,5.6,5.7,5.8,5.9,6.0,6.1,6.2,6.3,6.4,6.5,6.6,6.7,6.8,6.9,7.0,7.1,7.2,7.3,7.4,7.5,7.6,7.7,7.8,7.9,8.0,8.1,8.2,8.3,8.4,8.5,8.6,8.7,8.8,8.9,9.0,9.1,9.2,9.3,9.4,9.5,9.6,9.7,9.8,9.9,10.0,10.1,10.2,10.3,10.4,10.5,10.6,10.7,10.8,10.9,11.0,11.1,11.2,11.3,11.4,11.5,11.6,11.7,11.8,11.9,12.0,12.1,12.2,12.3,12.4,12.5,12.6,12.7,12.8,12.9,13.0,13.1,13.2,13.3,13.4,13.5,13.6,13.7,13.8,13.9,14.0,14.1,14.2,14.3,14.4,14.5,14.6,14.7,14.8,14.9,15.0,15.1,15.2,15.3,15.4,15.5,15.6,15.7,15.8,15.9,16.0,16.1,16.2,16.3,16.4,16.5,16.6]},"sw":{"vac":[1.022,7.151,13.269,19.369,25.442,31.478,37.469,43.407,49.284,55.09,60.819,66.46,72.008,77.453,82.788,88.005,93.097,98.057,102.878,107.552,112.074,116.436,120.633,124.658,128.507,132.172,135.65,138.935,142.023,144.908,147.588,150.058,152.315,154.356,156.177,157.776,159.151,160.3,161.221,161.913,162.375,162.606,162.606,162.375,161.913,161.221,160.3,159.151,157.776,156.177,154.356,152.315,150.058,147.588,144.908,142.023,138.935,135.65,132.172,128.507,124.658,120.633,116.436,112.074,107.552,102.878,98.057,93.097,88.005,82.788,77.453,72.008,66.46,60.819,55.09,49.284,43.407,37.469,31.478,25.442,19.369,13.269,7.151,1.022,-5.108,-11.232,-17.339,-23.421,-29.47,-35.478,-41.435,-47.333,-53.163,-58.918,-64.59,-70.17,-75.65,-81.022,-86.279,-91.414,-96.419,-101.287,-106.011,-110.584,-115.0,-119.253,-123.336,-127.244,-130.971,-134.512,-137.862,-141.016,-143.969,-146.718,-149.259,-151.587,-153.7,-155.594,-157.268,-158.718,-159.942,-160.939,-161.708,-162.246,-162.554,-162.631,-162.477,-162.092,-161.477,-160.632,-159.559,-158.259,-156.735,-154.987,-153.02,-150.835,-148.435,-145.825,-143.007,-139.986,-136.767,-133.353,-129.749,-125.961,-121.994,-117.854,-113.546,-109.077,-104.452,-99.68,-94.766,-89.717,-84.54,-79.244,-73.835,-68.32,-62.709,-57.009,-51.228,-45.374,-39.455,-33.48,-27.458,-21.397,-15.305,-9.192,-3.065],"iin":[-44.674,0.0,-0.138,-0.367,-0.15,0.801,1.593,3.059,4.367,6.076,8.083,9.922,12.53,14.681,17.541,20.284,23.111,26.48,29.309,32.968,35.897,39.057,42.38,44.804,47.89,50.412,52.264,54.707,56.245,57.145,58.508,58.871,58.413,58.33,57.336,55.245,53.422,50.959,47.179,43.484,39.545,34.263,28.834,23.57,17.178,10.451,4.321,-2.16,-8.584,-13.903,-18.981,-24.006,-27.986,-31.52,-34.99,-37.533,-39.598,-41.589,-42.773,-43.596,-44.324,-44.361,-44.263,-43.978,-43.203,-42.497,-41.443,-40.305,-39.254,-38.207,-37.359,-36.523,-35.888,-35.355,-34.968,-34.782,-34.708,-34.876,-35.182,-35.712,-36.441,-37.358,-38.52,-39.863,-0.0,0.221,0.568,0.486,-0.4,-1.256,-2.701,-4.071,-5.786,-7.818,-9.712,-12.309,-14.546,-17.398,-20.213,-23.078,-26.481,-29.405,-33.092,-36.205,-39.461,-42.905,-45.547,-48.752,-51.462,-53.57,-56.171,-57.942,-59.142,-60.703,-61.316,-61.193,-61.34,-60.587,-58.833,-57.253,-54.989,-51.5,-48.026,-44.21,-39.12,-33.838,-28.591,-22.25,-15.546,-9.207,-2.219,4.792,10.783,16.652,22.312,26.934,31.212,35.284,38.396,41.101,43.605,45.262,46.598,47.719,48.134,48.41,48.403,47.917,47.449,46.594,45.646,44.649,43.694,42.916,42.097,41.535,40.984,40.638,40.438,40.355,40.525,40.789,41.318,41.999,42.895,44.022,45.323],"iref":[0.006,0.044,0.082,0.119,0.156,0.194,0.23,0.267,0.303,0.339,0.374,0.409,0.443,0.476,0.509,0.541,0.572,0.603,0.633,0.661,0.689,0.716,0.742,0.766,0.79,0.813,0.834,0.854,0.873,0.891,0.907,0.923,0.936,0.949,0.96,0.97,0.979,0.986,0.991,0.996,0.998,1.0,1.0,0.998,0.996,0.991,0.986,0.979,0.97,0.96,0.949,0.936,0.923,0.907,0.891,0.873,0.854,0.834,0.813,0.79,0.766,0.742,0.716,0.689,0.661,0.633,0.603,0.572,0.541,0.509,0.476,0.443,0.409,0.374,0.339,0.303,0.267,0.23,0.194,0.156,0.119,0.082,0.044,0.006,-0.031,-0.069,-0.107,-0.144,-0.181,-0.218,-0.255,-0.291,-0.327,-0.362,-0.397,-0.431,-0.465,-0.498,-0.53,-0.562,-0.593,-0.623,-0.652,-0.68,-0.707,-0.733,-0.758,-0.782,-0.805,-0.827,-0.848,-0.867,-0.885,-0.902,-0.918,-0.932,-0.945,-0.957,-0.967,-0.976,-0.983,-0.99,-0.994,-0.998,-1.0,-1.0,-0.999,-0.997,-0.993,-0.988,-0.981,-0.973,-0.964,-0.953,-0.941,-0.927,-0.913,-0.897,-0.879,-0.861,-0.841,-0.82,-0.798,-0.774,-0.75,-0.725,-0.698,-0.671,-0.642,-0.613,-0.583,-0.552,-0.52,-0.487,-0.454,-0.42,-0.386,-0.35,-0.315,-0.279,-0.243,-0.206,-0.169,-0.132,-0.094,-0.057,-0.019],"Vbus":[122.231,144.126,87.045,152.829,95.066,129.919,124.841,100.334,145.948,92.109,140.135,110.049,116.527,134.766,99.41,143.884,104.164,132.621,125.017,118.075,154.869,122.667,157.845,160.131,145.182,184.471,173.997,171.524,207.011,196.541,196.371,229.31,223.506,219.765,249.853,250.82,241.6,265.897,273.855,260.344,275.343,288.066,272.888,276.889,290.468,275.577,269.452,282.583,273.606,262.219,270.91,263.188,247.639,252.351,245.251,228.033,230.381,222.496,205.677,207.672,196.919,183.21,185.264,169.809,163.925,160.771,145.34,147.501,140.959,141.668,139.167,135.707,137.251,131.501,133.774,129.552,129.099,128.609,124.891,126.903,122.481,123.772,121.673,120.152,144.338,89.12,150.466,98.397,127.817,126.502,100.689,144.899,94.602,137.855,112.441,115.379,135.106,100.445,142.171,106.352,130.566,126.367,115.814,152.01,123.177,154.522,158.395,144.879,181.257,172.314,171.19,204.077,194.811,196.449,227.098,221.94,220.572,249.0,249.919,243.413,267.001,274.343,263.489,278.774,290.637,277.756,282.757,295.497,282.488,277.697,287.816,277.63,270.317,278.249,268.281,255.998,260.43,250.638,235.96,238.006,227.519,212.844,213.942,201.28,189.427,189.626,173.803,168.628,163.577,149.172,149.651,140.009,144.247,137.519,136.902,136.53,130.359,134.181,126.77,129.376,125.815,123.589,125.154,119.31,122.686,117.685,118.422],"Vref":[140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,142.878,147.552,152.074,156.436,160.633,164.658,168.507,172.172,175.65,178.935,182.023,184.908,187.588,190.058,192.315,194.356,196.177,197.776,199.151,200.3,201.221,201.913,202.375,202.606,202.606,202.375,201.913,201.221,200.3,199.151,197.776,196.177,194.356,192.315,190.058,187.588,184.908,182.023,178.935,175.65,172.172,168.507,164.658,160.633,156.436,152.074,147.552,142.878,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,141.287,146.011,150.584,155.0,159.253,163.336,167.244,170.971,174.512,177.862,181.016,183.969,186.718,189.259,191.587,193.7,195.594,197.268,198.718,199.942,200.939,201.708,202.246,202.554,202.631,202.477,202.092,201.477,200.632,199.559,198.259,196.735,194.987,193.02,190.835,188.435,185.825,183.007,179.986,176.767,173.353,169.749,165.961,161.994,157.854,153.546,149.077,144.452,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0,140.0],"Vo":[85.943,86.023,85.903,85.328,85.697,84.918,85.209,84.819,84.634,84.822,84.298,84.756,84.388,84.686,84.859,84.882,85.571,85.609,86.498,86.95,87.769,89.018,89.858,91.542,93.122,94.711,97.065,99.199,101.501,104.452,107.19,110.039,113.441,116.649,119.783,123.335,126.706,129.761,133.02,136.09,138.616,141.06,143.274,144.773,145.896,146.712,146.722,146.138,145.302,143.895,142.02,140.075,137.808,135.219,132.712,130.078,127.265,124.653,122.025,119.347,116.952,114.56,112.253,110.237,108.188,106.395,104.732,103.104,101.639,100.17,98.861,97.569,96.364,95.24,94.122,93.124,92.104,91.181,90.272,89.392,88.583,87.752,87.011,86.256,86.28,86.191,85.611,85.951,85.213,85.446,85.094,84.871,85.052,84.533,84.938,84.595,84.83,85.006,84.993,85.641,85.675,86.491,86.95,87.686,88.879,89.696,91.293,92.83,94.391,96.673,98.778,101.075,103.987,106.727,109.619,113.04,116.302,119.549,123.204,126.704,129.957,133.42,136.711,139.523,142.273,144.799,146.665,148.175,149.373,149.8,149.631,149.08,147.859,146.16,144.293,142.005,139.396,136.801,133.996,131.025,128.209,125.321,122.41,119.744,117.058,114.49,112.177,109.852,107.792,105.855,104.011,102.306,100.596,99.094,97.552,96.175,94.826,93.527,92.352,91.136,90.073,88.974,87.964,86.997,86.024,85.165,84.259],"ib":[-13.475,10.081,-4.252,-2.274,7.689,-10.66,11.394,-7.56,5.0,3.414,-3.297,12.41,-4.16,13.365,4.331,9.021,16.155,7.194,24.003,12.731,25.89,29.04,25.204,42.285,37.653,42.393,56.177,51.009,58.048,69.563,64.841,70.086,80.164,75.403,76.338,84.292,79.153,74.445,78.587,72.815,62.46,61.172,54.318,39.458,32.267,23.891,6.229,-5.267,-11.859,-24.942,-33.778,-36.033,-44.006,-49.767,-48.432,-52.279,-55.002,-51.011,-52.395,-52.255,-46.756,-47.408,-44.237,-39.244,-39.6,-33.503,-32.046,-30.078,-27.408,-27.028,-23.717,-23.696,-21.255,-20.281,-19.509,-17.419,-17.759,-15.564,-15.694,-14.539,-13.598,-13.675,-11.952,-12.372,8.89,-3.284,-2.852,7.596,-10.196,10.381,-6.721,3.954,3.657,-3.636,11.653,-3.854,12.042,4.563,7.916,15.634,6.717,22.668,12.754,23.946,28.102,24.42,40.442,36.833,41.568,54.649,50.493,57.766,68.72,65.037,70.898,80.563,76.783,78.746,86.515,82.193,78.802,83.044,77.855,68.868,67.899,61.37,47.679,40.826,32.481,15.644,3.763,-5.668,-20.511,-29.8,-34.397,-44.136,-50.024,-50.433,-55.737,-58.265,-55.538,-57.833,-57.248,-52.734,-53.562,-49.966,-45.686,-45.475,-39.428,-37.894,-34.584,-32.962,-31.918,-28.304,-28.936,-25.132,-25.315,-23.279,-21.667,-21.797,-18.919,-19.826,-17.426,-17.31,-16.63,-14.901,-15.559],"t":[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.3,1.4,1.5,1.6,1.7,1.8,1.9,2.0,2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9,3.0,3.1,3.2,3.3,3.4,3.5,3.6,3.7,3.8,3.9,4.0,4.1,4.2,4.3,4.4,4.5,4.6,4.7,4.8,4.9,5.0,5.1,5.2,5.3,5.4,5.5,5.6,5.7,5.8,5.9,6.0,6.1,6.2,6.3,6.4,6.5,6.6,6.7,6.8,6.9,7.0,7.1,7.2,7.3,7.4,7.5,7.6,7.7,7.8,7.9,8.0,8.1,8.2,8.3,8.4,8.5,8.6,8.7,8.8,8.9,9.0,9.1,9.2,9.3,9.4,9.5,9.6,9.7,9.8,9.9,10.0,10.1,10.2,10.3,10.4,10.5,10.6,10.7,10.8,10.9,11.0,11.1,11.2,11.3,11.4,11.5,11.6,11.7,11.8,11.9,12.0,12.1,12.2,12.3,12.4,12.5,12.6,12.7,12.8,12.9,13.0,13.1,13.2,13.3,13.4,13.5,13.6,13.7,13.8,13.9,14.0,14.1,14.2,14.3,14.4,14.5,14.6,14.7,14.8,14.9,15.0,15.1,15.2,15.3,15.4,15.5,15.6,15.7,15.8,15.9,16.0,16.1,16.2,16.3,16.4,16.5,16.6]},"vstep":{"g1_lin":[[0,100.0,6.135],[0.02,100.0,6.135],[0.04,100.0,6.135],[0.06,100.0,6.135],[0.08,100.0,6.135],[0.1,100.0,6.135],[0.12,100.0,6.135],[0.14,100.0,6.135],[0.16,100.0,6.135],[0.18,100.0,6.135],[0.2,100.0,6.135],[0.22,100.0,6.135],[0.24,100.0,6.135],[0.26,100.0,6.135],[0.28,100.0,6.135],[0.3,100.0,6.135],[0.32,100.0,6.135],[0.34,100.0,6.135],[0.36,100.0,6.135],[0.38,100.0,6.135],[0.4,100.0,6.135],[0.42,100.0,6.135],[0.44,100.0,6.135],[0.46,100.0,6.135],[0.48,100.0,6.135],[0.5,100.0,6.135],[0.52,100.0,6.135],[0.54,100.0,6.135],[0.56,100.0,6.135],[0.58,100.0,6.135],[0.6,100.0,6.135],[0.62,100.0,6.135],[0.64,100.0,6.135],[0.66,100.0,6.135],[0.68,100.0,6.135],[0.7,100.0,6.135],[0.72,100.0,6.135],[0.74,100.0,6.135],[0.76,100.0,6.135],[0.78,100.0,6.135],[0.8,100.0,6.135],[0.82,100.0,6.135],[0.84,100.0,6.135],[0.86,100.0,6.135],[0.88,100.0,6.135],[0.9,100.0,6.135],[0.92,100.0,6.135],[0.94,100.0,6.135],[0.96,100.0,6.135],[0.98,100.0,6.135],[1.0,100.0,6.135],[1.02,103.321,5.9633],[1.04,106.834,5.6166],[1.06,108.497,5.3823],[1.08,109.014,5.2292],[1.1,109.091,5.2192],[1.12,109.063,5.219],[1.14,109.032,5.2204],[1.16,109.015,5.221],[1.18,109.006,5.22],[1.2,109.0,5.219],[1.22,108.995,5.2179],[1.24,108.99,5.2168],[1.26,108.985,5.2158],[1.28,108.979,5.2136],[1.3,108.974,5.2126],[1.32,108.969,5.2115],[1.34,108.964,5.2105],[1.36,108.958,5.2094],[1.38,108.953,5.2073],[1.4,108.948,5.2062],[1.42,108.943,5.2052],[1.44,108.937,5.2041],[1.46,108.932,5.2031],[1.48,108.927,5.201],[1.5,108.922,5.1999],[1.52,108.917,5.1989],[1.54,108.911,5.1978],[1.56,108.906,5.1968],[1.58,108.901,5.1947],[1.6,108.896,5.1936],[1.62,108.89,5.1926],[1.64,108.885,5.1915],[1.66,108.88,5.1905],[1.68,108.875,5.1884],[1.7,108.87,5.1873],[1.72,108.865,5.1863],[1.74,108.859,5.1852],[1.76,108.854,5.1842],[1.78,108.849,5.1821],[1.8,108.844,5.1811],[1.82,108.839,5.18],[1.84,108.833,5.179],[1.86,108.828,5.1779],[1.88,108.823,5.1759],[1.9,108.818,5.1748],[1.92,108.813,5.1738],[1.94,108.808,5.1727],[1.96,108.802,5.1717],[1.98,108.797,5.1696],[2.0,108.792,5.1686],[2.02,108.787,5.1676],[2.04,108.782,5.1665],[2.06,108.777,5.1655],[2.08,108.772,5.1634],[2.1,108.766,5.1624],[2.12,108.761,5.1613],[2.14,108.756,5.1603],[2.16,108.751,5.1593],[2.18,108.746,5.1572],[2.2,108.741,5.1562],[2.22,108.736,5.1552],[2.24,108.731,5.1541],[2.26,108.725,5.1531],[2.28,108.72,5.151],[2.3,108.715,5.15],[2.32,108.71,5.149],[2.34,108.705,5.148],[2.36,108.7,5.1469],[2.38,108.695,5.1449],[2.4,108.69,5.1439],[2.42,108.685,5.1428],[2.44,108.68,5.1418],[2.46,108.675,5.1408],[2.48,108.67,5.1387],[2.5,108.664,5.1377],[2.52,108.659,5.1367],[2.54,108.654,5.1357],[2.56,108.649,5.1347],[2.58,108.644,5.1326],[2.6,108.639,5.1316],[2.62,108.634,5.1306],[2.64,108.629,5.1296],[2.66,108.624,5.1286],[2.68,108.619,5.1265],[2.7,108.614,5.1255],[2.72,108.609,5.1245],[2.74,108.604,5.1235],[2.76,108.599,5.1225],[2.78,108.594,5.1204],[2.8,108.589,5.1194],[2.82,108.584,5.1184],[2.84,108.579,5.1174],[2.86,108.574,5.1164],[2.88,108.569,5.1144],[2.9,108.564,5.1134],[2.92,108.559,5.1123],[2.94,108.553,5.1113],[2.96,108.548,5.1103],[2.98,108.544,5.1083],[3.0,108.539,5.1073],[3.02,108.533,5.1063],[3.04,108.528,5.1053],[3.06,108.523,5.1043],[3.08,108.519,5.1023],[3.1,108.514,5.1013],[3.12,108.509,5.1003],[3.14,108.504,5.0993],[3.16,108.499,5.0983],[3.18,108.494,5.0963],[3.2,108.489,5.0953],[3.22,108.484,5.0943],[3.24,108.479,5.0933],[3.26,108.474,5.0923],[3.28,108.469,5.0903],[3.3,108.464,5.0893],[3.32,108.459,5.0883],[3.34,108.454,5.0873],[3.36,108.449,5.0863],[3.38,108.444,5.0843],[3.4,108.439,5.0833],[3.42,108.434,5.0823],[3.44,108.429,5.0813],[3.46,108.424,5.0803],[3.48,108.419,5.0783],[3.5,108.414,5.0773],[3.52,108.409,5.0763],[3.54,108.405,5.0754],[3.56,108.4,5.0744],[3.58,108.395,5.0724],[3.6,108.39,5.0714],[3.62,108.385,5.0704],[3.64,108.38,5.0694],[3.66,108.375,5.0684],[3.68,108.37,5.0665],[3.7,108.365,5.0655],[3.72,108.36,5.0645],[3.74,108.355,5.0635],[3.76,108.351,5.0625],[3.78,108.346,5.0605],[3.8,108.341,5.0596],[3.82,108.336,5.0586],[3.84,108.331,5.0576],[3.86,108.326,5.0566],[3.88,108.321,5.0547],[3.9,108.316,5.0537],[3.92,108.311,5.0527],[3.94,108.307,5.0517],[3.96,108.302,5.0507],[3.98,108.297,5.0488],[4.0,108.292,5.0478],[4.02,108.287,5.0468],[4.04,108.282,5.0459],[4.06,108.277,5.0449],[4.08,108.273,5.0429],[4.1,108.268,5.042],[4.12,108.263,5.041],[4.14,108.258,5.04],[4.16,108.253,5.039],[4.18,108.248,5.0371],[4.2,108.244,5.0361],[4.22,108.239,5.0351],[4.24,108.234,5.0342],[4.26,108.229,5.0332],[4.28,108.224,5.0313],[4.3,108.219,5.0303],[4.32,108.215,5.0293],[4.34,108.21,5.0284],[4.36,108.205,5.0274],[4.38,108.2,5.0255],[4.4,108.195,5.0245],[4.42,108.191,5.0235],[4.44,108.186,5.0226],[4.46,108.181,5.0216],[4.48,108.176,5.0197],[4.5,108.171,5.0187],[4.52,108.167,5.0177],[4.54,108.162,5.0168],[4.56,108.157,5.0158],[4.58,108.152,5.0139],[4.6,108.148,5.0129],[4.62,108.143,5.012],[4.64,108.138,5.011],[4.66,108.133,5.0101],[4.68,108.128,5.0081],[4.7,108.124,5.0072],[4.72,108.119,5.0062],[4.74,108.114,5.0053],[4.76,108.109,5.0043],[4.78,108.105,5.0024],[4.8,108.1,5.0014],[4.82,108.095,5.0005],[4.84,108.09,4.9995],[4.86,108.086,4.9986],[4.88,108.081,4.9967],[4.9,108.076,4.9957],[4.92,108.071,4.9948],[4.94,108.067,4.9938],[4.96,108.062,4.9929],[4.98,108.057,4.991],[5.0,108.052,4.99],[5.02,104.555,5.1746],[5.04,101.24,5.5182],[5.06,99.788,5.7288],[5.08,99.303,5.8626],[5.1,99.172,5.8754],[5.12,99.144,5.8792],[5.14,99.141,5.8802],[5.16,99.142,5.8804],[5.18,99.143,5.8805],[5.2,99.144,5.8806],[5.22,99.144,5.8807],[5.24,99.145,5.8808],[5.26,99.145,5.8809],[5.28,99.145,5.8811],[5.3,99.146,5.8812],[5.32,99.146,5.8813],[5.34,99.147,5.8814],[5.36,99.147,5.8815],[5.38,99.148,5.8817],[5.4,99.148,5.8819],[5.42,99.149,5.882],[5.44,99.149,5.8821],[5.46,99.149,5.8822],[5.48,99.15,5.8824],[5.5,99.15,5.8825],[5.52,99.151,5.8826],[5.54,99.151,5.8827],[5.56,99.152,5.8828],[5.58,99.152,5.883],[5.6,99.152,5.8831],[5.62,99.153,5.8832],[5.64,99.153,5.8833],[5.66,99.154,5.8834],[5.68,99.154,5.8837],[5.7,99.154,5.8838],[5.72,99.155,5.8839],[5.74,99.155,5.884],[5.76,99.156,5.8841],[5.78,99.156,5.8843],[5.8,99.157,5.8844],[5.82,99.157,5.8845],[5.84,99.157,5.8846],[5.86,99.158,5.8847],[5.88,99.158,5.8849],[5.9,99.159,5.885],[5.92,99.159,5.8851],[5.94,99.16,5.8852],[5.96,99.16,5.8853],[5.98,99.16,5.8855],[6.0,99.161,5.8856],[6.02,99.161,5.8858],[6.04,99.162,5.8859],[6.06,99.162,5.886],[6.08,99.163,5.8862],[6.1,99.163,5.8863],[6.12,99.163,5.8864],[6.14,99.164,5.8865],[6.16,99.164,5.8866],[6.18,99.165,5.8868],[6.2,99.165,5.8869],[6.22,99.166,5.887],[6.24,99.166,5.8871],[6.26,99.166,5.8872],[6.28,99.167,5.8874],[6.3,99.167,5.8875],[6.32,99.168,5.8876],[6.34,99.168,5.8877],[6.36,99.168,5.8878],[6.38,99.169,5.888],[6.4,99.169,5.8881],[6.42,99.17,5.8882],[6.44,99.17,5.8884],[6.46,99.171,5.8885],[6.48,99.171,5.8887],[6.5,99.171,5.8888],[6.52,99.172,5.8889],[6.54,99.172,5.889],[6.56,99.173,5.8891],[6.58,99.173,5.8893],[6.6,99.173,5.8894],[6.62,99.174,5.8895],[6.64,99.174,5.8896],[6.66,99.175,5.8897],[6.68,99.175,5.8899],[6.7,99.176,5.89],[6.72,99.176,5.8901],[6.74,99.176,5.8902],[6.76,99.177,5.8903],[6.78,99.177,5.8905],[6.8,99.178,5.8906],[6.82,99.178,5.8907],[6.84,99.178,5.8908],[6.86,99.179,5.8909],[6.88,99.179,5.8911],[6.9,99.18,5.8912],[6.92,99.18,5.8913],[6.94,99.181,5.8914],[6.96,99.181,5.8915],[6.98,99.181,5.8917],[7.0,99.182,5.8918],[7.02,99.182,5.8919],[7.04,99.183,5.892],[7.06,99.183,5.8922],[7.08,99.183,5.8924],[7.1,99.184,5.8925],[7.12,99.184,5.8926],[7.14,99.185,5.8927],[7.16,99.185,5.8928],[7.18,99.185,5.893],[7.2,99.186,5.8931],[7.22,99.186,5.8932],[7.24,99.187,5.8933],[7.26,99.187,5.8934],[7.28,99.188,5.8936],[7.3,99.188,5.8937],[7.32,99.188,5.8938],[7.34,99.189,5.8939],[7.36,99.189,5.894],[7.38,99.19,5.8942],[7.4,99.19,5.8943],[7.42,99.19,5.8944],[7.44,99.191,5.8945],[7.46,99.191,5.8946],[7.48,99.192,5.8948],[7.5,99.192,5.8949],[7.52,99.192,5.895],[7.54,99.193,5.8951],[7.56,99.193,5.8952],[7.58,99.194,5.8954],[7.6,99.194,5.8955],[7.62,99.194,5.8956],[7.64,99.195,5.8957],[7.66,99.195,5.8958],[7.68,99.196,5.896],[7.7,99.196,5.8961],[7.72,99.196,5.8962],[7.74,99.197,5.8963],[7.76,99.197,5.8964],[7.78,99.198,5.8966],[7.8,99.198,5.8967],[7.82,99.199,5.8968],[7.84,99.199,5.8969],[7.86,99.199,5.897],[7.88,99.2,5.8972],[7.9,99.2,5.8973],[7.92,99.201,5.8974],[7.94,99.201,5.8975],[7.96,99.201,5.8976],[7.98,99.202,5.8978],[8.0,99.202,5.8979],[8.02,99.203,5.898],[8.04,99.203,5.8981],[8.06,99.203,5.8982],[8.08,99.204,5.8984],[8.1,99.204,5.8985],[8.12,99.205,5.8986],[8.14,99.205,5.8987],[8.16,99.205,5.8988],[8.18,99.206,5.899],[8.2,99.206,5.8991],[8.22,99.207,5.8992],[8.24,99.207,5.8993],[8.26,99.207,5.8994],[8.28,99.208,5.8996],[8.3,99.208,5.8997],[8.32,99.209,5.8998],[8.34,99.209,5.8999],[8.36,99.209,5.9],[8.38,99.21,5.9002],[8.4,99.21,5.9003],[8.42,99.211,5.9004],[8.44,99.211,5.9005],[8.46,99.211,5.9006],[8.48,99.212,5.9008],[8.5,99.212,5.9009],[8.52,99.213,5.901],[8.54,99.213,5.901],[8.56,99.213,5.9011],[8.58,99.214,5.9013],[8.6,99.214,5.9014],[8.62,99.215,5.9015],[8.64,99.215,5.9016],[8.66,99.215,5.9017],[8.68,99.216,5.9019],[8.7,99.216,5.902],[8.72,99.216,5.9021],[8.74,99.217,5.9022],[8.76,99.217,5.9023],[8.78,99.218,5.9025],[8.8,99.218,5.9026],[8.82,99.218,5.9027],[8.84,99.219,5.9028],[8.86,99.219,5.9029],[8.88,99.22,5.9031],[8.9,99.22,5.9032],[8.92,99.22,5.9033],[8.94,99.221,5.9034],[8.96,99.221,5.9035],[8.98,99.222,5.9037],[9.0,99.222,5.9038]],"g1_sim":[[0.0,100.0,6.1488],[0.1,99.86,6.1877],[0.2,99.864,6.1876],[0.3,99.865,6.1879],[0.4,99.866,6.1882],[0.5,99.867,6.1884],[0.6,99.868,6.1887],[0.7,99.869,6.189],[0.8,99.87,6.1893],[0.9,99.871,6.1896],[1.0,99.872,6.1899],[1.1,109.105,5.2489],[1.2,109.005,5.2499],[1.3,108.979,5.2435],[1.4,108.953,5.2373],[1.5,108.928,5.2311],[1.6,108.902,5.2248],[1.7,108.876,5.2186],[1.8,108.851,5.2125],[1.9,108.825,5.2063],[2.0,108.8,5.2002],[2.1,108.775,5.194],[2.2,108.749,5.1879],[2.3,108.724,5.1819],[2.4,108.699,5.1758],[2.5,108.674,5.1697],[2.6,108.649,5.1637],[2.7,108.624,5.1577],[2.8,108.599,5.1517],[2.9,108.574,5.1457],[3.0,108.55,5.1397],[3.1,108.525,5.1338],[3.2,108.501,5.1279],[3.3,108.476,5.122],[3.4,108.452,5.1161],[3.5,108.428,5.1102],[3.6,108.403,5.1043],[3.7,108.379,5.0985],[3.8,108.355,5.0927],[3.9,108.331,5.0869],[4.0,108.307,5.0811],[4.1,108.283,5.0753],[4.2,108.259,5.0695],[4.3,108.235,5.0638],[4.4,108.212,5.0581],[4.5,108.188,5.0524],[4.6,108.164,5.0467],[4.7,108.141,5.041],[4.8,108.117,5.0354],[4.9,108.094,5.0297],[5.0,108.071,5.0241],[5.1,99.055,5.9342],[5.2,99.031,5.9394],[5.3,99.034,5.9402],[5.4,99.037,5.9411],[5.5,99.04,5.9421],[5.6,99.043,5.9429],[5.7,99.046,5.9438],[5.8,99.049,5.9447],[5.9,99.052,5.9456],[6.0,99.055,5.9465],[6.1,99.058,5.9474],[6.2,99.061,5.9483],[6.3,99.064,5.9492],[6.4,99.067,5.9501],[6.5,99.07,5.9509],[6.6,99.073,5.9518],[6.7,99.076,5.9527],[6.8,99.079,5.9536],[6.9,99.082,5.9544],[7.0,99.084,5.9553],[7.1,99.087,5.9562],[7.2,99.09,5.957],[7.3,99.093,5.9579],[7.4,99.096,5.9588],[7.5,99.099,5.9596],[7.6,99.102,5.9605],[7.7,99.105,5.9613],[7.8,99.108,5.9622],[7.9,99.11,5.963],[8.0,99.113,5.9639],[8.1,99.116,5.9647],[8.2,99.119,5.9656],[8.3,99.122,5.9664],[8.4,99.124,5.9672],[8.5,99.127,5.9681],[8.6,99.13,5.9689],[8.7,99.133,5.9698],[8.8,99.136,5.9706],[8.9,99.138,5.9714]],"g2_lin":[[0,100.0,6.135],[0.02,100.0,6.135],[0.04,100.0,6.135],[0.06,100.0,6.135],[0.08,100.0,6.135],[0.1,100.0,6.135],[0.12,100.0,6.135],[0.14,100.0,6.135],[0.16,100.0,6.135],[0.18,100.0,6.135],[0.2,100.0,6.135],[0.22,100.0,6.135],[0.24,100.0,6.135],[0.26,100.0,6.135],[0.28,100.0,6.135],[0.3,100.0,6.135],[0.32,100.0,6.135],[0.34,100.0,6.135],[0.36,100.0,6.135],[0.38,100.0,6.135],[0.4,100.0,6.135],[0.42,100.0,6.135],[0.44,100.0,6.135],[0.46,100.0,6.135],[0.48,100.0,6.135],[0.5,100.0,6.135],[0.52,100.0,6.135],[0.54,100.0,6.135],[0.56,100.0,6.135],[0.58,100.0,6.135],[0.6,100.0,6.135],[0.62,100.0,6.135],[0.64,100.0,6.135],[0.66,100.0,6.135],[0.68,100.0,6.135],[0.7,100.0,6.135],[0.72,100.0,6.135],[0.74,100.0,6.135],[0.76,100.0,6.135],[0.78,100.0,6.135],[0.8,100.0,6.135],[0.82,100.0,6.135],[0.84,100.0,6.135],[0.86,100.0,6.135],[0.88,100.0,6.135],[0.9,100.0,6.135],[0.92,100.0,6.135],[0.94,100.0,6.135],[0.96,100.0,6.135],[0.98,100.0,6.135],[1.0,100.0,6.135],[1.02,103.342,6.055],[1.04,107.042,5.8615],[1.06,109.032,5.6546],[1.08,109.731,5.2822],[1.1,109.688,5.1195],[1.12,109.273,4.9702],[1.14,108.696,4.8328],[1.16,108.07,4.7059],[1.18,107.447,4.4795],[1.2,106.847,4.3786],[1.22,106.28,4.2847],[1.24,105.755,4.1977],[1.26,105.271,4.117],[1.28,104.829,3.9722],[1.3,104.421,3.9075],[1.32,104.045,3.8473],[1.34,103.701,3.7915],[1.36,103.387,3.7397],[1.38,103.1,3.6469],[1.4,102.837,3.6054],[1.42,102.595,3.5669],[1.44,102.373,3.5311],[1.46,102.171,3.4979],[1.48,101.987,3.4384],[1.5,101.818,3.4118],[1.52,101.663,3.3871],[1.54,101.52,3.3642],[1.56,101.391,3.343],[1.58,101.273,3.3049],[1.6,101.164,3.2878],[1.62,101.065,3.272],[1.64,100.973,3.2574],[1.66,100.89,3.2438],[1.68,100.815,3.2194],[1.7,100.745,3.2085],[1.72,100.681,3.1984],[1.74,100.623,3.189],[1.76,100.57,3.1803],[1.78,100.521,3.1647],[1.8,100.477,3.1577],[1.82,100.436,3.1512],[1.84,100.399,3.1452],[1.86,100.365,3.1396],[1.88,100.334,3.1296],[1.9,100.305,3.1252],[1.92,100.279,3.121],[1.94,100.255,3.1172],[1.96,100.233,3.1136],[1.98,100.213,3.1072],[2.0,100.195,3.1044],[2.02,100.178,3.1017],[2.04,100.163,3.0993],[2.06,100.149,3.097],[2.08,100.137,3.0929],[2.1,100.125,3.0911],[2.12,100.114,3.0894],[2.14,100.104,3.0878],[2.16,100.095,3.0864],[2.18,100.087,3.0838],[2.2,100.08,3.0826],[2.22,100.073,3.0815],[2.24,100.067,3.0805],[2.26,100.061,3.0796],[2.28,100.056,3.0779],[2.3,100.051,3.0771],[2.32,100.047,3.0765],[2.34,100.043,3.0758],[2.36,100.039,3.0752],[2.38,100.036,3.0741],[2.4,100.033,3.0737],[2.42,100.03,3.0732],[2.44,100.027,3.0728],[2.46,100.025,3.0724],[2.48,100.023,3.0717],[2.5,100.021,3.0714],[2.52,100.019,3.0712],[2.54,100.017,3.0709],[2.56,100.016,3.0706],[2.58,100.015,3.0702],[2.6,100.013,3.07],[2.62,100.012,3.0698],[2.64,100.011,3.0697],[2.66,100.01,3.0695],[2.68,100.009,3.0692],[2.7,100.009,3.0691],[2.72,100.008,3.069],[2.74,100.007,3.0689],[2.76,100.007,3.0688],[2.78,100.006,3.0686],[2.8,100.005,3.0685],[2.82,100.005,3.0684],[2.84,100.005,3.0684],[2.86,100.004,3.0683],[2.88,100.004,3.0682],[2.9,100.003,3.0681],[2.92,100.003,3.0681],[2.94,100.003,3.0681],[2.96,100.003,3.068],[2.98,100.002,3.0679],[3.0,100.002,3.0679],[3.02,100.002,3.0679],[3.04,100.002,3.0678],[3.06,100.002,3.0678],[3.08,100.002,3.0678],[3.1,100.001,3.0678],[3.12,100.001,3.0677],[3.14,100.001,3.0677],[3.16,100.001,3.0677],[3.18,100.001,3.0677],[3.2,100.001,3.0677],[3.22,100.001,3.0676],[3.24,100.001,3.0676],[3.26,100.001,3.0676],[3.28,100.001,3.0676],[3.3,100.001,3.0676],[3.32,100.001,3.0676],[3.34,100.0,3.0676],[3.36,100.0,3.0676],[3.38,100.0,3.0676],[3.4,100.0,3.0676],[3.42,100.0,3.0676],[3.44,100.0,3.0675],[3.46,100.0,3.0675],[3.48,100.0,3.0675],[3.5,100.0,3.0675],[3.52,100.0,3.0675],[3.54,100.0,3.0675],[3.56,100.0,3.0675],[3.58,100.0,3.0675],[3.6,100.0,3.0675],[3.62,100.0,3.0675],[3.64,100.0,3.0675],[3.66,100.0,3.0675],[3.68,100.0,3.0675],[3.7,100.0,3.0675],[3.72,100.0,3.0675],[3.74,100.0,3.0675],[3.76,100.0,3.0675],[3.78,100.0,3.0675],[3.8,100.0,3.0675],[3.82,100.0,3.0675],[3.84,100.0,3.0675],[3.86,100.0,3.0675],[3.88,100.0,3.0675],[3.9,100.0,3.0675],[3.92,100.0,3.0675],[3.94,100.0,3.0675],[3.96,100.0,3.0675],[3.98,100.0,3.0675],[4.0,100.0,3.0675],[4.02,100.0,3.0675],[4.04,100.0,3.0675],[4.06,100.0,3.0675],[4.08,100.0,3.0675],[4.1,100.0,3.0675],[4.12,100.0,3.0675],[4.14,100.0,3.0675],[4.16,100.0,3.0675],[4.18,100.0,3.0675],[4.2,100.0,3.0675],[4.22,100.0,3.0675],[4.24,100.0,3.0675],[4.26,100.0,3.0675],[4.28,100.0,3.0675],[4.3,100.0,3.0675],[4.32,100.0,3.0675],[4.34,100.0,3.0675],[4.36,100.0,3.0675],[4.38,100.0,3.0675],[4.4,100.0,3.0675],[4.42,100.0,3.0675],[4.44,100.0,3.0675],[4.46,100.0,3.0675],[4.48,100.0,3.0675],[4.5,100.0,3.0675],[4.52,100.0,3.0675],[4.54,100.0,3.0675],[4.56,100.0,3.0675],[4.58,100.0,3.0675],[4.6,100.0,3.0675],[4.62,100.0,3.0675],[4.64,100.0,3.0675],[4.66,100.0,3.0675],[4.68,100.0,3.0675],[4.7,100.0,3.0675],[4.72,100.0,3.0675],[4.74,100.0,3.0675],[4.76,100.0,3.0675],[4.78,100.0,3.0675],[4.8,100.0,3.0675],[4.82,100.0,3.0675],[4.84,100.0,3.0675],[4.86,100.0,3.0675],[4.88,100.0,3.0675],[4.9,100.0,3.0675],[4.92,100.0,3.0675],[4.94,100.0,3.0675],[4.96,100.0,3.0675],[4.98,100.0,3.0675],[5.0,100.0,3.0675],[5.02,96.827,3.1461],[5.04,93.757,3.32],[5.06,92.279,3.4943],[5.08,91.795,3.8026],[5.1,91.834,3.9393],[5.12,92.129,4.0667],[5.14,92.534,4.1859],[5.16,92.975,4.2977],[5.18,93.417,4.5016],[5.2,93.85,4.5947],[5.22,94.265,4.6824],[5.24,94.655,4.765],[5.26,95.018,4.8428],[5.28,95.355,4.9854],[5.3,95.671,5.0506],[5.32,95.968,5.1121],[5.34,96.244,5.1701],[5.36,96.499,5.2248],[5.38,96.736,5.325],[5.4,96.958,5.3708],[5.42,97.165,5.4141],[5.44,97.359,5.4549],[5.46,97.538,5.4933],[5.48,97.703,5.5638],[5.5,97.859,5.5961],[5.52,98.005,5.6266],[5.54,98.14,5.6553],[5.56,98.266,5.6824],[5.58,98.382,5.7321],[5.6,98.492,5.7548],[5.62,98.594,5.7763],[5.64,98.689,5.7965],[5.66,98.778,5.8156],[5.68,98.86,5.8507],[5.7,98.937,5.8667],[5.72,99.009,5.8818],[5.74,99.076,5.8961],[5.76,99.138,5.9096],[5.78,99.196,5.9343],[5.8,99.25,5.9456],[5.82,99.301,5.9563],[5.84,99.348,5.9664],[5.86,99.392,5.9759],[5.88,99.433,5.9933],[5.9,99.471,6.0013],[5.92,99.507,6.0088],[5.94,99.54,6.0159],[5.96,99.571,6.0226],[5.98,99.599,6.0349],[6.0,99.626,6.0406],[6.02,99.652,6.0459],[6.04,99.675,6.0509],[6.06,99.697,6.0557],[6.08,99.717,6.0643],[6.1,99.736,6.0683],[6.12,99.754,6.0721],[6.14,99.771,6.0756],[6.16,99.786,6.079],[6.18,99.8,6.0851],[6.2,99.814,6.0879],[6.22,99.826,6.0906],[6.24,99.838,6.0931],[6.26,99.849,6.0954],[6.28,99.859,6.0998],[6.3,99.869,6.1017],[6.32,99.877,6.1036],[6.34,99.886,6.1054],[6.36,99.893,6.107],[6.38,99.9,6.1101],[6.4,99.907,6.1115],[6.42,99.913,6.1128],[6.44,99.919,6.1141],[6.46,99.925,6.1152],[6.48,99.93,6.1174],[6.5,99.934,6.1184],[6.52,99.939,6.1193],[6.54,99.943,6.1202],[6.56,99.947,6.121],[6.58,99.95,6.1226],[6.6,99.954,6.1233],[6.62,99.957,6.1239],[6.64,99.96,6.1245],[6.66,99.962,6.1251],[6.68,99.965,6.1262],[6.7,99.967,6.1267],[6.72,99.97,6.1272],[6.74,99.972,6.1276],[6.76,99.973,6.128],[6.78,99.975,6.1288],[6.8,99.977,6.1291],[6.82,99.978,6.1295],[6.84,99.98,6.1298],[6.86,99.981,6.1301],[6.88,99.983,6.1306],[6.9,99.984,6.1308],[6.92,99.985,6.1311],[6.94,99.986,6.1313],[6.96,99.987,6.1315],[6.98,99.988,6.1319],[7.0,99.988,6.1321],[7.02,99.989,6.1322],[7.04,99.99,6.1324],[7.06,99.991,6.1325],[7.08,99.991,6.1328],[7.1,99.992,6.1329],[7.12,99.992,6.133],[7.14,99.993,6.1331],[7.16,99.993,6.1332],[7.18,99.994,6.1334],[7.2,99.994,6.1335],[7.22,99.995,6.1336],[7.24,99.995,6.1337],[7.26,99.995,6.1337],[7.28,99.996,6.1339],[7.3,99.996,6.1339],[7.32,99.996,6.134],[7.34,99.996,6.1341],[7.36,99.997,6.1341],[7.38,99.997,6.1342],[7.4,99.997,6.1342],[7.42,99.997,6.1343],[7.44,99.998,6.1343],[7.46,99.998,6.1344],[7.48,99.998,6.1344],[7.5,99.998,6.1345],[7.52,99.998,6.1345],[7.54,99.998,6.1345],[7.56,99.998,6.1345],[7.58,99.998,6.1346],[7.6,99.999,6.1346],[7.62,99.999,6.1346],[7.64,99.999,6.1346],[7.66,99.999,6.1347],[7.68,99.999,6.1347],[7.7,99.999,6.1347],[7.72,99.999,6.1347],[7.74,99.999,6.1347],[7.76,99.999,6.1348],[7.78,99.999,6.1348],[7.8,99.999,6.1348],[7.82,99.999,6.1348],[7.84,99.999,6.1348],[7.86,99.999,6.1348],[7.88,99.999,6.1348],[7.9,99.999,6.1348],[7.92,100.0,6.1348],[7.94,100.0,6.1349],[7.96,100.0,6.1349],[7.98,100.0,6.1349],[8.0,100.0,6.1349],[8.02,100.0,6.1349],[8.04,100.0,6.1349],[8.06,100.0,6.1349],[8.08,100.0,6.1349],[8.1,100.0,6.1349],[8.12,100.0,6.1349],[8.14,100.0,6.1349],[8.16,100.0,6.1349],[8.18,100.0,6.1349],[8.2,100.0,6.1349],[8.22,100.0,6.1349],[8.24,100.0,6.1349],[8.26,100.0,6.1349],[8.28,100.0,6.1349],[8.3,100.0,6.1349],[8.32,100.0,6.1349],[8.34,100.0,6.1349],[8.36,100.0,6.1349],[8.38,100.0,6.1349],[8.4,100.0,6.1349],[8.42,100.0,6.1349],[8.44,100.0,6.1349],[8.46,100.0,6.135],[8.48,100.0,6.135],[8.5,100.0,6.135],[8.52,100.0,6.135],[8.54,100.0,6.135],[8.56,100.0,6.135],[8.58,100.0,6.135],[8.6,100.0,6.135],[8.62,100.0,6.135],[8.64,100.0,6.135],[8.66,100.0,6.135],[8.68,100.0,6.135],[8.7,100.0,6.135],[8.72,100.0,6.135],[8.74,100.0,6.135],[8.76,100.0,6.135],[8.78,100.0,6.135],[8.8,100.0,6.135],[8.82,100.0,6.135],[8.84,100.0,6.135],[8.86,100.0,6.135],[8.88,100.0,6.135],[8.9,100.0,6.135],[8.92,100.0,6.135],[8.94,100.0,6.135],[8.96,100.0,6.135],[8.98,100.0,6.135],[9.0,100.0,6.135]],"g2_sim":[[0.0,100.0,6.1488],[0.1,99.85,6.1979],[0.2,99.958,6.2283],[0.3,100.042,6.2498],[0.4,100.101,6.2649],[0.5,100.144,6.2757],[0.6,100.174,6.2833],[0.7,100.195,6.2886],[0.8,100.21,6.2924],[0.9,100.22,6.2951],[1.0,100.228,6.297],[1.1,110.146,5.2523],[1.2,107.224,4.4839],[1.3,104.707,3.9956],[1.4,103.063,3.6827],[1.5,102.006,3.4823],[1.6,101.328,3.354],[1.7,100.894,3.2719],[1.8,100.616,3.2194],[1.9,100.438,3.1858],[2.0,100.325,3.1643],[2.1,100.252,3.1506],[2.2,100.206,3.1418],[2.3,100.176,3.1362],[2.4,100.157,3.1326],[2.5,100.145,3.1304],[2.6,100.137,3.1289],[2.7,100.132,3.128],[2.8,100.129,3.1274],[2.9,100.127,3.127],[3.0,100.125,3.1267],[3.1,100.125,3.1266],[3.2,100.124,3.1265],[3.3,100.124,3.1264],[3.4,100.124,3.1264],[3.5,100.123,3.1263],[3.6,100.123,3.1263],[3.7,100.123,3.1263],[3.8,100.123,3.1263],[3.9,100.123,3.1263],[4.0,100.123,3.1263],[4.1,100.123,3.1263],[4.2,100.123,3.1263],[4.3,100.123,3.1263],[4.4,100.123,3.1263],[4.5,100.123,3.1263],[4.6,100.123,3.1263],[4.7,100.123,3.1263],[4.8,100.123,3.1263],[4.9,100.123,3.1263],[5.0,100.123,3.1263],[5.1,91.801,4.0219],[5.2,93.871,4.7001],[5.3,95.753,5.1724],[5.4,97.084,5.5046],[5.5,98.017,5.7387],[5.6,98.673,5.9038],[5.7,99.135,6.0204],[5.8,99.461,6.1028],[5.9,99.691,6.161],[6.0,99.854,6.2022],[6.1,99.969,6.2313],[6.2,100.05,6.2518],[6.3,100.107,6.2664],[6.4,100.148,6.2767],[6.5,100.176,6.284],[6.6,100.197,6.2891],[6.7,100.211,6.2928],[6.8,100.221,6.2954],[6.9,100.228,6.2972],[7.0,100.234,6.2985],[7.1,100.237,6.2994],[7.2,100.24,6.3],[7.3,100.242,6.3005],[7.4,100.243,6.3008],[7.5,100.244,6.301],[7.6,100.244,6.3012],[7.7,100.245,6.3013],[7.8,100.245,6.3014],[7.9,100.245,6.3015],[8.0,100.246,6.3015],[8.1,100.246,6.3015],[8.2,100.246,6.3015],[8.3,100.246,6.3016],[8.4,100.246,6.3016],[8.5,100.246,6.3016],[8.6,100.246,6.3016],[8.7,100.246,6.3016],[8.8,100.246,6.3016],[8.9,100.246,6.3016]],"g3_lin":[[0,100.0,6.135],[0.02,100.0,6.135],[0.04,100.0,6.135],[0.06,100.0,6.135],[0.08,100.0,6.135],[0.1,100.0,6.135],[0.12,100.0,6.135],[0.14,100.0,6.135],[0.16,100.0,6.135],[0.18,100.0,6.135],[0.2,100.0,6.135],[0.22,100.0,6.135],[0.24,100.0,6.135],[0.26,100.0,6.135],[0.28,100.0,6.135],[0.3,100.0,6.135],[0.32,100.0,6.135],[0.34,100.0,6.135],[0.36,100.0,6.135],[0.38,100.0,6.135],[0.4,100.0,6.135],[0.42,100.0,6.135],[0.44,100.0,6.135],[0.46,100.0,6.135],[0.48,100.0,6.135],[0.5,100.0,6.135],[0.52,100.0,6.135],[0.54,100.0,6.135],[0.56,100.0,6.135],[0.58,100.0,6.135],[0.6,100.0,6.135],[0.62,100.0,6.135],[0.64,100.0,6.135],[0.66,100.0,6.135],[0.68,100.0,6.135],[0.7,100.0,6.135],[0.72,100.0,6.135],[0.74,100.0,6.135],[0.76,100.0,6.135],[0.78,100.0,6.135],[0.8,100.0,6.135],[0.82,100.0,6.135],[0.84,100.0,6.135],[0.86,100.0,6.135],[0.88,100.0,6.135],[0.9,100.0,6.135],[0.92,100.0,6.135],[0.94,100.0,6.135],[0.96,100.0,6.135],[0.98,100.0,6.135],[1.0,100.0,6.135],[1.02,103.308,5.9064],[1.04,106.675,5.3943],[1.06,107.906,4.9393],[1.08,107.715,4.3684],[1.1,106.932,4.1941],[1.12,106.031,4.0562],[1.14,105.197,3.9412],[1.16,104.476,3.8415],[1.18,103.861,3.6747],[1.2,103.332,3.6052],[1.22,102.876,3.5432],[1.24,102.483,3.4886],[1.26,102.145,3.4402],[1.28,101.854,3.3593],[1.3,101.602,3.3258],[1.32,101.383,3.296],[1.34,101.194,3.2697],[1.36,101.031,3.2465],[1.38,100.891,3.2076],[1.4,100.769,3.1915],[1.42,100.664,3.1772],[1.44,100.573,3.1646],[1.46,100.495,3.1534],[1.48,100.428,3.1348],[1.5,100.37,3.127],[1.52,100.319,3.1202],[1.54,100.275,3.1141],[1.56,100.238,3.1087],[1.58,100.205,3.0998],[1.6,100.177,3.0961],[1.62,100.153,3.0928],[1.64,100.132,3.0899],[1.66,100.114,3.0873],[1.68,100.099,3.083],[1.7,100.085,3.0812],[1.72,100.074,3.0796],[1.74,100.063,3.0782],[1.76,100.055,3.077],[1.78,100.047,3.0749],[1.8,100.041,3.0741],[1.82,100.035,3.0733],[1.84,100.03,3.0726],[1.86,100.026,3.0721],[1.88,100.023,3.0711],[1.9,100.02,3.0706],[1.92,100.017,3.0703],[1.94,100.015,3.07],[1.96,100.013,3.0697],[1.98,100.011,3.0692],[2.0,100.009,3.069],[2.02,100.008,3.0688],[2.04,100.007,3.0687],[2.06,100.006,3.0685],[2.08,100.005,3.0683],[2.1,100.005,3.0682],[2.12,100.004,3.0681],[2.14,100.003,3.0681],[2.16,100.003,3.068],[2.18,100.003,3.0679],[2.2,100.002,3.0678],[2.22,100.002,3.0678],[2.24,100.002,3.0678],[2.26,100.001,3.0677],[2.28,100.001,3.0677],[2.3,100.001,3.0677],[2.32,100.001,3.0676],[2.34,100.001,3.0676],[2.36,100.001,3.0676],[2.38,100.001,3.0676],[2.4,100.001,3.0676],[2.42,100.0,3.0676],[2.44,100.0,3.0675],[2.46,100.0,3.0675],[2.48,100.0,3.0675],[2.5,100.0,3.0675],[2.52,100.0,3.0675],[2.54,100.0,3.0675],[2.56,100.0,3.0675],[2.58,100.0,3.0675],[2.6,100.0,3.0675],[2.62,100.0,3.0675],[2.64,100.0,3.0675],[2.66,100.0,3.0675],[2.68,100.0,3.0675],[2.7,100.0,3.0675],[2.72,100.0,3.0675],[2.74,100.0,3.0675],[2.76,100.0,3.0675],[2.78,100.0,3.0675],[2.8,100.0,3.0675],[2.82,100.0,3.0675],[2.84,100.0,3.0675],[2.86,100.0,3.0675],[2.88,100.0,3.0675],[2.9,100.0,3.0675],[2.92,100.0,3.0675],[2.94,100.0,3.0675],[2.96,100.0,3.0675],[2.98,100.0,3.0675],[3.0,100.0,3.0675],[3.02,100.0,3.0675],[3.04,100.0,3.0675],[3.06,100.0,3.0675],[3.08,100.0,3.0675],[3.1,100.0,3.0675],[3.12,100.0,3.0675],[3.14,100.0,3.0675],[3.16,100.0,3.0675],[3.18,100.0,3.0675],[3.2,100.0,3.0675],[3.22,100.0,3.0675],[3.24,100.0,3.0675],[3.26,100.0,3.0675],[3.28,100.0,3.0675],[3.3,100.0,3.0675],[3.32,100.0,3.0675],[3.34,100.0,3.0675],[3.36,100.0,3.0675],[3.38,100.0,3.0675],[3.4,100.0,3.0675],[3.42,100.0,3.0675],[3.44,100.0,3.0675],[3.46,100.0,3.0675],[3.48,100.0,3.0675],[3.5,100.0,3.0675],[3.52,100.0,3.0675],[3.54,100.0,3.0675],[3.56,100.0,3.0675],[3.58,100.0,3.0675],[3.6,100.0,3.0675],[3.62,100.0,3.0675],[3.64,100.0,3.0675],[3.66,100.0,3.0675],[3.68,100.0,3.0675],[3.7,100.0,3.0675],[3.72,100.0,3.0675],[3.74,100.0,3.0675],[3.76,100.0,3.0675],[3.78,100.0,3.0675],[3.8,100.0,3.0675],[3.82,100.0,3.0675],[3.84,100.0,3.0675],[3.86,100.0,3.0675],[3.88,100.0,3.0675],[3.9,100.0,3.0675],[3.92,100.0,3.0675],[3.94,100.0,3.0675],[3.96,100.0,3.0675],[3.98,100.0,3.0675],[4.0,100.0,3.0675],[4.02,100.0,3.0675],[4.04,100.0,3.0675],[4.06,100.0,3.0675],[4.08,100.0,3.0675],[4.1,100.0,3.0675],[4.12,100.0,3.0675],[4.14,100.0,3.0675],[4.16,100.0,3.0675],[4.18,100.0,3.0675],[4.2,100.0,3.0675],[4.22,100.0,3.0675],[4.24,100.0,3.0675],[4.26,100.0,3.0675],[4.28,100.0,3.0675],[4.3,100.0,3.0675],[4.32,100.0,3.0675],[4.34,100.0,3.0675],[4.36,100.0,3.0675],[4.38,100.0,3.0675],[4.4,100.0,3.0675],[4.42,100.0,3.0675],[4.44,100.0,3.0675],[4.46,100.0,3.0675],[4.48,100.0,3.0675],[4.5,100.0,3.0675],[4.52,100.0,3.0675],[4.54,100.0,3.0675],[4.56,100.0,3.0675],[4.58,100.0,3.0675],[4.6,100.0,3.0675],[4.62,100.0,3.0675],[4.64,100.0,3.0675],[4.66,100.0,3.0675],[4.68,100.0,3.0675],[4.7,100.0,3.0675],[4.72,100.0,3.0675],[4.74,100.0,3.0675],[4.76,100.0,3.0675],[4.78,100.0,3.0675],[4.8,100.0,3.0675],[4.82,100.0,3.0675],[4.84,100.0,3.0675],[4.86,100.0,3.0675],[4.88,100.0,3.0675],[4.9,100.0,3.0675],[4.92,100.0,3.0675],[4.94,100.0,3.0675],[4.96,100.0,3.0675],[4.98,100.0,3.0675],[5.0,100.0,3.0675],[5.02,96.865,3.292],[5.04,94.11,3.7482],[5.06,93.248,4.1221],[5.08,93.398,4.5986],[5.1,93.932,4.762],[5.12,94.557,4.9004],[5.14,95.159,5.021],[5.16,95.706,5.1283],[5.18,96.192,5.3119],[5.2,96.626,5.3904],[5.22,97.012,5.4616],[5.24,97.354,5.5258],[5.26,97.655,5.5838],[5.28,97.92,5.684],[5.3,98.156,5.7269],[5.32,98.367,5.7659],[5.34,98.553,5.8011],[5.36,98.717,5.8328],[5.38,98.862,5.8877],[5.4,98.991,5.9113],[5.42,99.106,5.9326],[5.44,99.208,5.9519],[5.46,99.297,5.9693],[5.48,99.377,5.9994],[5.5,99.447,6.0123],[5.52,99.51,6.024],[5.54,99.566,6.0346],[5.56,99.615,6.0441],[5.58,99.658,6.0606],[5.6,99.697,6.0677],[5.62,99.731,6.0741],[5.64,99.762,6.0799],[5.66,99.789,6.0851],[5.68,99.813,6.0942],[5.7,99.834,6.0981],[5.72,99.853,6.1016],[5.74,99.869,6.1048],[5.76,99.884,6.1076],[5.78,99.897,6.1126],[5.8,99.909,6.1147],[5.82,99.919,6.1167],[5.84,99.928,6.1184],[5.86,99.936,6.12],[5.88,99.944,6.1227],[5.9,99.95,6.1239],[5.92,99.956,6.1249],[5.94,99.961,6.1259],[5.96,99.965,6.1267],[5.98,99.969,6.1282],[6.0,99.973,6.1289],[6.02,99.976,6.1295],[6.04,99.978,6.13],[6.06,99.981,6.1305],[6.08,99.983,6.1313],[6.1,99.985,6.1316],[6.12,99.987,6.1319],[6.14,99.988,6.1322],[6.16,99.99,6.1325],[6.18,99.991,6.1329],[6.2,99.992,6.1331],[6.22,99.993,6.1333],[6.24,99.994,6.1335],[6.26,99.994,6.1336],[6.28,99.995,6.1339],[6.3,99.995,6.134],[6.32,99.996,6.1341],[6.34,99.996,6.1341],[6.36,99.997,6.1342],[6.38,99.997,6.1344],[6.4,99.998,6.1344],[6.42,99.998,6.1345],[6.44,99.998,6.1345],[6.46,99.998,6.1346],[6.48,99.998,6.1346],[6.5,99.999,6.1347],[6.52,99.999,6.1347],[6.54,99.999,6.1347],[6.56,99.999,6.1347],[6.58,99.999,6.1348],[6.6,99.999,6.1348],[6.62,99.999,6.1348],[6.64,99.999,6.1348],[6.66,99.999,6.1348],[6.68,100.0,6.1349],[6.7,100.0,6.1349],[6.72,100.0,6.1349],[6.74,100.0,6.1349],[6.76,100.0,6.1349],[6.78,100.0,6.1349],[6.8,100.0,6.1349],[6.82,100.0,6.1349],[6.84,100.0,6.1349],[6.86,100.0,6.1349],[6.88,100.0,6.1349],[6.9,100.0,6.1349],[6.92,100.0,6.1349],[6.94,100.0,6.1349],[6.96,100.0,6.1349],[6.98,100.0,6.135],[7.0,100.0,6.135],[7.02,100.0,6.135],[7.04,100.0,6.135],[7.06,100.0,6.135],[7.08,100.0,6.135],[7.1,100.0,6.135],[7.12,100.0,6.135],[7.14,100.0,6.135],[7.16,100.0,6.135],[7.18,100.0,6.135],[7.2,100.0,6.135],[7.22,100.0,6.135],[7.24,100.0,6.135],[7.26,100.0,6.135],[7.28,100.0,6.135],[7.3,100.0,6.135],[7.32,100.0,6.135],[7.34,100.0,6.135],[7.36,100.0,6.135],[7.38,100.0,6.135],[7.4,100.0,6.135],[7.42,100.0,6.135],[7.44,100.0,6.135],[7.46,100.0,6.135],[7.48,100.0,6.135],[7.5,100.0,6.135],[7.52,100.0,6.135],[7.54,100.0,6.135],[7.56,100.0,6.135],[7.58,100.0,6.135],[7.6,100.0,6.135],[7.62,100.0,6.135],[7.64,100.0,6.135],[7.66,100.0,6.135],[7.68,100.0,6.135],[7.7,100.0,6.135],[7.72,100.0,6.135],[7.74,100.0,6.135],[7.76,100.0,6.135],[7.78,100.0,6.135],[7.8,100.0,6.135],[7.82,100.0,6.135],[7.84,100.0,6.135],[7.86,100.0,6.135],[7.88,100.0,6.135],[7.9,100.0,6.135],[7.92,100.0,6.135],[7.94,100.0,6.135],[7.96,100.0,6.135],[7.98,100.0,6.135],[8.0,100.0,6.135],[8.02,100.0,6.135],[8.04,100.0,6.135],[8.06,100.0,6.135],[8.08,100.0,6.135],[8.1,100.0,6.135],[8.12,100.0,6.135],[8.14,100.0,6.135],[8.16,100.0,6.135],[8.18,100.0,6.135],[8.2,100.0,6.135],[8.22,100.0,6.135],[8.24,100.0,6.135],[8.26,100.0,6.135],[8.28,100.0,6.135],[8.3,100.0,6.135],[8.32,100.0,6.135],[8.34,100.0,6.135],[8.36,100.0,6.135],[8.38,100.0,6.135],[8.4,100.0,6.135],[8.42,100.0,6.135],[8.44,100.0,6.135],[8.46,100.0,6.135],[8.48,100.0,6.135],[8.5,100.0,6.135],[8.52,100.0,6.135],[8.54,100.0,6.135],[8.56,100.0,6.135],[8.58,100.0,6.135],[8.6,100.0,6.135],[8.62,100.0,6.135],[8.64,100.0,6.135],[8.66,100.0,6.135],[8.68,100.0,6.135],[8.7,100.0,6.135],[8.72,100.0,6.135],[8.74,100.0,6.135],[8.76,100.0,6.135],[8.78,100.0,6.135],[8.8,100.0,6.135],[8.82,100.0,6.135],[8.84,100.0,6.135],[8.86,100.0,6.135],[8.88,100.0,6.135],[8.9,100.0,6.135],[8.92,100.0,6.135],[8.94,100.0,6.135],[8.96,100.0,6.135],[8.98,100.0,6.135],[9.0,100.0,6.135]],"g3_sim":[[0.0,100.0,6.1488],[0.1,99.966,6.2402],[0.2,100.094,6.2678],[0.3,100.162,6.283],[0.4,100.2,6.2914],[0.5,100.221,6.296],[0.6,100.232,6.2985],[0.7,100.238,6.2999],[0.8,100.242,6.3007],[0.9,100.244,6.3011],[1.0,100.245,6.3013],[1.1,107.337,4.2922],[1.2,103.58,3.6816],[1.3,101.782,3.3926],[1.4,100.918,3.2539],[1.5,100.504,3.1875],[1.6,100.306,3.1556],[1.7,100.211,3.1403],[1.8,100.165,3.133],[1.9,100.143,3.1295],[2.0,100.133,3.1278],[2.1,100.128,3.127],[2.2,100.125,3.1267],[2.3,100.124,3.1265],[2.4,100.124,3.1264],[2.5,100.123,3.1263],[2.6,100.123,3.1263],[2.7,100.123,3.1263],[2.8,100.123,3.1263],[2.9,100.123,3.1263],[3.0,100.123,3.1263],[3.1,100.123,3.1263],[3.2,100.123,3.1263],[3.3,100.123,3.1263],[3.4,100.123,3.1263],[3.5,100.123,3.1263],[3.6,100.123,3.1263],[3.7,100.123,3.1263],[3.8,100.123,3.1263],[3.9,100.123,3.1263],[4.0,100.123,3.1263],[4.1,100.123,3.1263],[4.2,100.123,3.1263],[4.3,100.123,3.1263],[4.4,100.123,3.1263],[4.5,100.123,3.1263],[4.6,100.123,3.1263],[4.7,100.123,3.1263],[4.8,100.123,3.1263],[4.9,100.123,3.1263],[5.0,100.123,3.1263],[5.1,93.948,4.8744],[5.2,96.741,5.5265],[5.3,98.328,5.8762],[5.4,99.195,6.068],[5.5,99.669,6.1733],[5.6,99.929,6.2311],[5.7,100.072,6.2629],[5.8,100.15,6.2803],[5.9,100.193,6.2899],[6.0,100.217,6.2952],[6.1,100.23,6.2981],[6.2,100.237,6.2997],[6.3,100.241,6.3005],[6.4,100.243,6.301],[6.5,100.244,6.3013],[6.6,100.245,6.3014],[6.7,100.245,6.3015],[6.8,100.246,6.3016],[6.9,100.246,6.3016],[7.0,100.246,6.3016],[7.1,100.246,6.3016],[7.2,100.246,6.3016],[7.3,100.246,6.3016],[7.4,100.246,6.3016],[7.5,100.246,6.3016],[7.6,100.246,6.3016],[7.7,100.246,6.3016],[7.8,100.246,6.3016],[7.9,100.246,6.3016],[8.0,100.246,6.3016],[8.1,100.246,6.3016],[8.2,100.246,6.3016],[8.3,100.246,6.3016],[8.4,100.246,6.3016],[8.5,100.246,6.3016],[8.6,100.246,6.3016],[8.7,100.246,6.3016],[8.8,100.246,6.3016],[8.9,100.246,6.3016]]},"buck":{"t":[0.0,0.0005,0.001,0.0015,0.002,0.0025,0.003,0.0035,0.004,0.0045,0.005,0.0055,0.006,0.0065,0.007,0.0075,0.008,0.0085,0.009,0.0095,0.01,0.0105,0.011,0.0115,0.012,0.0125,0.013,0.0135,0.014,0.0145,0.015,0.0155,0.016,0.0165,0.017,0.0175,0.018,0.0185,0.019,0.0195,0.02,0.0205,0.021,0.0215,0.022,0.0225,0.023,0.0235,0.024,0.0245,0.025,0.0255,0.026,0.0265,0.027,0.0275,0.028,0.0285,0.029,0.0295,0.03,0.0305,0.031,0.0315,0.032,0.0325,0.033,0.0335,0.034,0.0345,0.035,0.0355,0.036,0.0365,0.037,0.0375,0.038,0.0385,0.039,0.0395,0.04,0.0405,0.041,0.0415,0.042,0.0425,0.043,0.0435,0.044,0.0445,0.045,0.0455,0.046,0.0465,0.047,0.0475,0.048,0.0485,0.049,0.0495,0.05,0.0505,0.051,0.0515,0.052,0.0525,0.053,0.0535,0.054,0.0545,0.055,0.0555,0.056,0.0565,0.057,0.0575,0.058,0.0585,0.059,0.0595,0.06,0.0605,0.061,0.0615,0.062,0.0625,0.063,0.0635,0.064,0.0645,0.065,0.0655,0.066,0.0665,0.067,0.0675,0.068,0.0685,0.069,0.0695,0.07,0.0705,0.071,0.0715,0.072,0.0725,0.073,0.0735,0.074,0.0745,0.075,0.0755,0.076,0.0765,0.077,0.0775,0.078,0.0785,0.079,0.0795,0.08,0.0805,0.081,0.0815,0.082,0.0825,0.083,0.0835,0.084,0.0845,0.085,0.0855,0.086,0.0865,0.087,0.0875,0.088,0.0885,0.089,0.0895,0.09,0.0905,0.091,0.0915,0.092,0.0925,0.093,0.0935,0.094,0.0945,0.095,0.0955,0.096,0.0965,0.097,0.0975,0.098,0.0985,0.099,0.0995,0.1,0.1005,0.101,0.1015,0.102,0.1025,0.103,0.1035,0.104,0.1045,0.105,0.1055,0.106,0.1065,0.107,0.1075,0.108,0.1085,0.109,0.1095,0.11,0.1105,0.111,0.1115,0.112,0.1125,0.113,0.1135,0.114,0.1145,0.115,0.1155,0.116,0.1165,0.117,0.1175,0.118,0.1185,0.119,0.1195,0.12,0.1205,0.121,0.1215,0.122,0.1225,0.123,0.1235,0.124,0.1245,0.125,0.1255,0.126,0.1265,0.127,0.1275,0.128,0.1285,0.129,0.1295,0.13,0.1305,0.131,0.1315,0.132,0.1325,0.133,0.1335,0.134,0.1345,0.135,0.1355,0.136,0.1365,0.137,0.1375,0.138,0.1385,0.139,0.1395,0.14,0.1405,0.141,0.1415,0.142,0.1425,0.143,0.1435,0.144,0.1445,0.145,0.1455,0.146,0.1465,0.147,0.1475,0.148,0.1485,0.149,0.1495,0.15,0.1505,0.151,0.1515,0.152,0.1525,0.153,0.1535,0.154,0.1545,0.155,0.1555,0.156,0.1565,0.157,0.1575,0.158,0.1585,0.159,0.1595,0.16,0.1605,0.161,0.1615,0.162,0.1625,0.163,0.1635,0.164,0.1645,0.165,0.1655,0.166,0.1665,0.167,0.1675,0.168,0.1685,0.169,0.1695,0.17,0.1705,0.171,0.1715,0.172,0.1725,0.173,0.1735,0.174,0.1745,0.175,0.1755,0.176,0.1765,0.177,0.1775,0.178,0.1785,0.179,0.1795,0.18,0.1805,0.181,0.1815,0.182,0.1825,0.183,0.1835,0.184,0.1845,0.185,0.1855,0.186,0.1865,0.187,0.1875,0.188,0.1885,0.189,0.1895,0.19,0.1905,0.191,0.1915,0.192,0.1925,0.193,0.1935,0.194,0.1945,0.195,0.1955,0.196,0.1965,0.197,0.1975,0.198,0.1985,0.199,0.1995,0.2,0.2005,0.201,0.2015,0.202,0.2025,0.203,0.2035,0.204,0.2045,0.205,0.2055,0.206,0.2065,0.207,0.2075,0.208,0.2085,0.209,0.2095,0.21,0.2105,0.211,0.2115,0.212,0.2125,0.213,0.2135,0.214,0.2145,0.215,0.2155,0.216,0.2165,0.217,0.2175,0.218,0.2185,0.219,0.2195,0.22,0.2205,0.221,0.2215,0.222,0.2225,0.223,0.2235,0.224,0.2245,0.225,0.2255,0.226,0.2265,0.227,0.2275,0.228,0.2285,0.229,0.2295,0.23,0.2305,0.231,0.2315,0.232,0.2325,0.233,0.2335,0.234,0.2345,0.235,0.2355,0.236,0.2365,0.237,0.2375,0.238,0.2385,0.239,0.2395,0.24,0.2405,0.241,0.2415,0.242,0.2425,0.243,0.2435,0.244,0.2445,0.245,0.2455,0.246,0.2465,0.247,0.2475,0.248,0.2485,0.249,0.2495],"plus_ideal":[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,99.89,99.17,99.83,100.8,100.46,99.32,99.28,100.46,100.91,99.84,98.99,99.82,100.99,100.53,99.15,99.15,100.59,101.1,99.76,98.77,99.82,101.22,100.61,98.94,98.99,100.76,101.32,99.67,98.5,99.83,101.51,100.71,98.67,98.8,100.97,101.59,99.54,98.18,99.85,101.85,100.81,98.34,98.58,101.24,101.91,99.37,97.78,99.88,102.28,100.92,97.94,98.33,101.57,102.3,99.16,97.31,99.94,102.79,101.03,97.44,98.03,101.99,102.75,98.88,96.73,100.03,103.43,101.16,96.82,97.68,102.52,103.3,98.52,96.04,100.17,104.2,101.29,96.06,97.28,103.17,103.94,98.06,95.2,100.36,105.14,101.41,95.12,96.83,103.99,104.71,97.46,94.2,100.63,106.28,101.53,93.96,96.3,105.02,105.62,96.71,92.99,101.0,107.68,101.63,92.54,95.7,106.29,106.69,95.75,91.53,101.49,109.37,101.7,90.8,95.02,107.88,107.95,94.53,89.79,102.16,111.42,101.72,88.66,94.25,109.85,109.43,92.99,87.7,103.05,113.92,101.66,86.03,93.4,112.3,111.18,91.04,85.2,104.21,116.94,101.5,82.82,92.46,115.33,113.22,88.58,82.21,105.74,120.59,101.17,78.89,91.42,119.08,115.61,85.49,78.64,107.72,125.01,100.64,74.08,90.31,123.72,118.38,81.61,74.39,110.3,130.35,99.81,68.21,89.14,129.44,121.6,76.75,69.33,113.62,136.8,98.58,61.05,87.92,136.5,125.33,70.67,63.31,117.88,144.57,96.83,52.32,86.72,145.21,129.62,63.07,56.18,123.34,153.92,94.38,41.69,85.58,155.92,134.54,53.59,47.74,130.31,165.17,91.01,28.76,84.59,169.09,140.16,41.78,37.76,139.18,178.69,86.45,13.05,83.89,185.27,146.52,27.08,25.99,150.44,194.91,80.33,-6.04,83.64,205.12,153.7,8.83,12.14,164.69,214.35,72.2,-29.18,84.08,229.47,161.71,-13.82,-4.12,182.7,237.61,61.48,-50,85.52,250,170.59,-41.89,-23.17,205.41,250,47.43,-50,88.37,250,180.31,-50,-45.43,233.97,250,29.14,-50,93.17,250,190.82,-50,-50,250,250,9.1,-50,87.5,250,213.8,-50,-50,250,250,9.07,-50,51.17,250,250,-50,-50,250,250,57.6,-50,-36.32,250,250,-50,-50,184.62,250,185.69,-50,-50,250,250,-43.83,-50,6.67],"minus_ideal":[100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,99.89,99.05,99.16,100.05,100.81,100.75,99.99,99.31,99.33,99.97,100.59,100.6,100.06,99.5,99.46,99.93,100.42,100.48,100.09,99.65,99.58,99.9,100.29,100.38,100.1,99.76,99.67,99.9,100.2,100.29,100.1,99.83,99.74,99.9,100.14,100.23,100.1,99.89,99.8,99.91,100.09,100.17,100.09,99.93,99.85,99.92,100.06,100.13,100.08,99.96,99.89,99.93,100.03,100.1,100.06,99.97,99.92,99.94,100.02,100.07,100.05,99.99,99.94,99.95,100.01,100.05,100.04,99.99,99.95,99.96,100.0,100.04,100.04,100.0,99.97,99.97,100.0,100.03,100.03,100.0,99.98,99.97,100.0,100.02,100.02,100.0,99.98,99.98,100.0,100.01,100.02,100.0,99.99,99.98,100.0,100.01,100.01,100.0,99.99,99.99,100.0,100.01,100.01,100.0,99.99,99.99,100.0,100.0,100.01,100.0,100.0,99.99,100.0,100.0,100.01,100.0,100.0,99.99,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0],"minusKi_par":[100.0,99.88,99.75,99.75,99.82,99.85,99.82,99.76,99.74,99.75,99.76,99.74,99.71,99.69,99.68,99.67,99.65,99.63,99.6,99.58,99.57,99.54,99.52,99.49,99.46,99.44,99.41,99.38,99.34,99.31,99.27,99.23,99.19,99.15,99.1,99.05,99.0,98.95,98.9,98.84,98.78,98.71,98.64,98.57,98.49,98.41,98.33,98.24,98.15,98.05,97.95,97.84,97.72,97.6,97.47,97.34,97.2,97.05,96.89,96.73,96.55,96.37,96.18,95.97,95.76,95.53,95.3,95.05,94.78,94.51,94.21,93.91,93.58,93.24,92.88,92.5,92.11,91.69,91.24,90.78,90.29,89.77,89.23,88.66,88.05,87.42,86.75,86.05,85.31,84.53,83.7,82.84,81.93,80.96,79.95,78.89,77.77,76.59,75.34,74.03,72.65,71.2,69.67,68.06,66.36,64.57,62.69,60.71,58.62,56.42,54.1,51.66,49.1,46.39,43.54,40.54,37.38,34.06,30.55,26.86,22.97,18.88,14.57,10.03,5.25,0.23,-3.16,-1.99,1.08,2.04,0.41,-1.2,-0.99,0.28,0.86,0.3,-0.44,-0.47,0.04,0.35,0.18,-0.15,-0.21,-0.02,0.14,0.09,-0.04,-0.09,-0.02,0.05,0.05,-0.01,-0.04,-0.01,0.02,0.02,-0.0,-0.02,-0.01,0.01,0.01,0.0,-0.01,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,-0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0,0.0,0.0,-0.0,-0.0,0.0],"plusKi_par":[100.0,99.88,99.78,99.81,99.91,99.96,99.9,99.85,99.87,99.92,99.94,99.92,99.9,99.91,99.93,99.95,99.94,99.93,99.93,99.94,99.95,99.95,99.95,99.95,99.96,99.96,99.96,99.96,99.96,99.96,99.97,99.97,99.97,99.97,99.97,99.97,99.97,99.98,99.98,99.98,99.98,99.98,99.98,99.98,99.98,99.98,99.98,99.98,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,99.79,99.15,99.57,100.27,100.36,99.89,99.57,99.75,100.09,100.14,99.93,99.78,99.85,100.01,100.05,99.95,99.88,99.91,99.99,100.0,99.96,99.93,99.94,99.98,99.99,99.97,99.95,99.96,99.98,99.98,99.98,99.97,99.97,99.98,99.98,99.98,99.98,99.98,99.98,99.99,99.98,99.98,99.98,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,99.99,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0,100.0]}};
+// ---- complex helpers ----
+const cx = (re, im = 0) => ({ re, im });
+const cadd = (a, b) => cx(a.re + b.re, a.im + b.im);
+const csub = (a, b) => cx(a.re - b.re, a.im - b.im);
+const cmul = (a, b) => cx(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re);
+const cdiv = (a, b) => { const d = b.re * b.re + b.im * b.im; return cx((a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d); };
+const cscale = (a, k) => cx(a.re * k, a.im * k);
+const cexpj = th => cx(Math.cos(th), Math.sin(th));
+const cabs = a => Math.hypot(a.re, a.im);
+const carg = a => Math.atan2(a.im, a.re);
+const logspace = (a, b, n) => Array.from({ length: n }, (_, i) => Math.pow(10, a + (b - a) * i / (n - 1)));
+
+// unwrap phase (deg) for plotting
+function unwrapDeg(arr) {
+  const out = []; let off = 0;
+  for (let i = 0; i < arr.length; i++) {
+    let v = arr[i] + off;
+    if (i > 0) { while (v - out[i - 1] > 180) { off -= 360; v -= 360; } while (v - out[i - 1] < -180) { off += 360; v += 360; } }
+    out.push(v);
+  }
+  return out;
+}
+
+// margins from a sampled loop gain
+function margins(f, T) {
+  let pm = null, fc = null, gm = null, f180 = null;
+  for (let i = 1; i < f.length; i++) {
+    const m0 = cabs(T[i - 1]), m1 = cabs(T[i]);
+    if ((m0 - 1) * (m1 - 1) <= 0 && m0 !== m1) {
+      const a = carg(T[i]) * 180 / Math.PI;
+      const p = a <= 0 ? 180 + a : a - 180;
+      if (pm === null || p < pm) { pm = p; fc = f[i]; }
+    }
+    const y0 = T[i - 1].im, y1 = T[i].im;
+    if (y0 * y1 <= 0 && (T[i].re < 0 || T[i - 1].re < 0) && y0 !== y1) {
+      const g = -20 * Math.log10(cabs(T[i]));
+      if (gm === null || g < gm) { gm = g; f180 = f[i]; }
+    }
+  }
+  return { pm, fc, gm, f180 };
+}
+
+// ---- PFC current loop:  T = K/(sL) e^{-sTd} ----
+function currentLoop(f, K, L, Td) {
+  return f.map(fr => { const w = 2 * Math.PI * fr; return cscale(cexpj(-Math.PI / 2 - w * Td), K / (w * L)); });
+}
+
+// ---- PFC voltage loop (sampled once per line cycle) ----
+// plant: Ipre -> Vo_filt,  G(s) = (Vm/2)/(Co Vo s + Gd) * 1/(tau s + 1), ZOH at T = 1/60
+function voltageLoop(f, p) {
+  const T = 1 / 60, { Vm, Co, Vo, K, tau, Vkp, Vki, Rload, cpl } = p;
+  const Gd = Vm * Vm / (2 * K * Vo) + (cpl ? 0 : 2 * Vo / Rload);
+  const k = Vm / (2 * Co * Vo * tau), a = Gd / (Co * Vo), b = 1 / tau;
+  const A = k / (a * b), B = k / (a * (a - b)), Cc = k / (b * (b - a));
+  const ea = Math.exp(-a * T), eb = Math.exp(-b * T);
+  return {
+    Gd, pole: a / (2 * Math.PI),
+    T: f.map(fr => {
+      const zi = cexpj(-2 * Math.PI * fr * T);
+      const one = cx(1);
+      const omz = csub(one, zi);
+      const G = cadd(cx(A), cmul(omz, cadd(cdiv(cx(B), csub(one, cscale(zi, ea))), cdiv(cx(Cc), csub(one, cscale(zi, eb))))));
+      const Cz = cadd(cx(Vkp), cdiv(cx(Vki * T), omz));
+      return cmul(Cz, G);
+    })
+  };
+}
+
+// ---- Buck voltage loop ----
+function buckPlant(f, p) {
+  const { Vbus, L, C, R, rC, rL } = p;
+  return f.map(fr => {
+    const s = cx(0, 2 * Math.PI * fr);
+    const Zc = cadd(cx(rC), cdiv(cx(1), cscale(s, C)));
+    const Zp = cdiv(cscale(Zc, R), cadd(cx(R), Zc));
+    return cscale(cdiv(Zp, cadd(cadd(cscale(s, L), cx(rL)), Zp)), Vbus);
+  });
+}
+function buckLoop(f, p) {
+  const G = buckPlant(f, p);
+  return f.map((fr, i) => {
+    const s = cx(0, 2 * Math.PI * fr);
+    const Ctl = cscale(cadd(cx(p.Kp), cdiv(cx(p.Ki), s)), p.sign / p.Vbus);
+    return cmul(cmul(Ctl, G[i]), cexpj(-2 * Math.PI * fr * p.Td));
+  });
+}
+
+
+
+// ---------- small SVG plotting ----------
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+let clipId = 0;
+function plot(host, cfg) {
+  const W = cfg.w || 420, H = cfg.h || 240, m = { l: 46, r: 10, t: 22, b: 34 };
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const X = cfg.x, Y = cfg.y;
+  const xs = v => X.log ? m.l + (Math.log10(v) - Math.log10(X.min)) / (Math.log10(X.max) - Math.log10(X.min)) * pw : m.l + (v - X.min) / (X.max - X.min) * pw;
+  const ys = v => m.t + (1 - (v - Y.min) / (Y.max - Y.min)) * ph;
+  host.innerHTML = '';
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': cfg.title || '' }, host);
+  const id = 'c' + (clipId++);
+  const cp = el('clipPath', { id }, el('defs', {}, svg)); el('rect', { x: m.l, y: m.t, width: pw, height: ph }, cp);
+  if (cfg.title) { const t = el('text', { x: m.l, y: 13 }, svg); t.textContent = cfg.title; t.setAttribute('style', 'fill:var(--fg);font-size:12px'); }
+  (cfg.bands || []).forEach(b => { el('rect', { x: xs(b.x0), y: m.t, width: Math.max(1, xs(b.x1) - xs(b.x0)), height: ph, style: `fill:${b.c};opacity:0.13`, 'clip-path': `url(#${id})` }, svg); });
+  (X.ticks || []).forEach(v => { el('line', { x1: xs(v), x2: xs(v), y1: m.t, y2: m.t + ph, style: 'stroke:var(--grid);stroke-width:1' }, svg); const t = el('text', { x: xs(v), y: m.t + ph + 14, 'text-anchor': 'middle' }, svg); t.textContent = X.fmt ? X.fmt(v) : v; });
+  (Y.ticks || []).forEach(v => { el('line', { x1: m.l, x2: m.l + pw, y1: ys(v), y2: ys(v), style: 'stroke:var(--grid);stroke-width:1' }, svg); const t = el('text', { x: m.l - 6, y: ys(v) + 4, 'text-anchor': 'end' }, svg); t.textContent = Y.fmt ? Y.fmt(v) : v; });
+  (cfg.hlines || []).forEach(h => el('line', { x1: m.l, x2: m.l + pw, y1: ys(h.y), y2: ys(h.y), style: `stroke:${h.c};stroke-width:1.2;stroke-dasharray:4 3` }, svg));
+  (cfg.vlines || []).forEach(v => { if (v.x < X.min || v.x > X.max) return; el('line', { x1: xs(v.x), x2: xs(v.x), y1: m.t, y2: m.t + ph, style: `stroke:${v.c};stroke-width:1.2;stroke-dasharray:3 3` }, svg); if (v.label) { const t = el('text', { x: xs(v.x) + 4, y: m.t + 11 }, svg); t.textContent = v.label; t.setAttribute('style', `fill:${v.c}`); } });
+  el('rect', { x: m.l, y: m.t, width: pw, height: ph, style: 'fill:none;stroke:var(--rule)' }, svg);
+  if (X.label) { const t = el('text', { x: m.l + pw, y: H - 4, 'text-anchor': 'end' }, svg); t.textContent = X.label; }
+  if (Y.label) { const t = el('text', { x: m.l, y: m.t - 6, 'text-anchor': 'start' }, svg); t.textContent = Y.label; if (cfg.title) t.setAttribute('x', W - m.r), t.setAttribute('text-anchor', 'end'); }
+  const g = el('g', { 'clip-path': `url(#${id})` }, svg);
+  (cfg.series || []).forEach(s => {
+    let d = '', pen = false;
+    for (let i = 0; i < s.x.length; i++) {
+      const xv = s.x[i], yv = s.y[i];
+      if (!isFinite(yv) || (X.log && xv <= 0)) { pen = false; continue; }
+      const py = Math.max(-1000, Math.min(H + 1000, ys(yv)));
+      d += (pen ? 'L' : 'M') + xs(xv).toFixed(1) + ' ' + py.toFixed(1); pen = true;
+    }
+    el('path', { d, style: `fill:none;stroke:${s.c};stroke-width:${s.w || 1.7};${s.dash ? 'stroke-dasharray:5 4;' : ''}stroke-linejoin:round` }, g);
+  });
+  (cfg.dots || []).forEach(p => { if (p.x < X.min || p.x > X.max) return; el('circle', { cx: xs(p.x), cy: ys(Math.max(Y.min, Math.min(Y.max, p.y))), r: 3.5, style: `fill:${p.c};stroke:var(--panel);stroke-width:1.5` }, svg); });
+}
+const fmtHz = v => v >= 1000 ? (v / 1000) + 'k' : (v < 1 ? v : v);
+const decTicks = (a, b) => { const t = []; for (let e = a; e <= b; e++) t.push(Math.pow(10, e)); return t; };
+const $ = id => document.getElementById(id);
+function pressGroup(btns, on) { btns.forEach(b => b.setAttribute('aria-pressed', b === on ? 'true' : 'false')); }
+function chip(text, cls) { return `<span class="chip ${cls || ''}">${text}</span>`; }
+const f1 = v => v === null ? '—' : (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+const fHz = v => v === null ? '—' : (v >= 1000 ? (v / 1000).toFixed(2) + ' kHz' : v >= 1 ? v.toFixed(v >= 100 ? 0 : 1) + ' Hz' : v.toFixed(3) + ' Hz');
+
+// ---------- frequency map ----------
+(function () {
+  const host = $('freqmap'); const W = 960, H = 250, l = 20, r = 20, top = 30, axisY = 205;
+  const lo = -3, hi = Math.log10(20000);
+  const xs = v => l + (Math.log10(v) - lo) / (hi - lo) * (W - l - r);
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '頻率地圖' }, host);
+  // bands
+  const band = (x0, x1, y, h, c, label, op) => { el('rect', { x: xs(x0), y, width: xs(x1) - xs(x0), height: h, rx: 2, style: `fill:${c};opacity:${op || 0.22}` }, svg); if (label) { const t = el('text', { x: xs(x0), y: y - 5 }, svg); t.textContent = label; t.setAttribute('style', `fill:${c};font-size:12px`); } };
+  band(3333, 20000, top + 12, axisY - top - 12, 'var(--warn)', '', 0.08);
+  const tW = el('text', { x: xs(20000) - 4, y: top + 4, 'text-anchor': 'end' }, svg); tW.textContent = '延遲使 boost 呈負電阻 > 3.33 kHz'; tW.setAttribute('style', 'fill:var(--warn);font-size:12px');
+  band(2860, 4150, 128, 22, 'var(--ch3)', '', 0.45); { const t = el('text', { x: xs(4150), y: 123, 'text-anchor': 'end' }, svg); t.textContent = 'bus 諧振 2.9–4.2 kHz'; t.setAttribute('style', 'fill:var(--ch3);font-size:12px'); }
+  band(0.5, 1.1, 70, 22, 'var(--ch4)', '電壓環（建議）0.5–1 Hz', 0.45);
+  const mark = (x, y, c, label, anchor) => { el('line', { x1: xs(x), x2: xs(x), y1: y, y2: axisY, style: `stroke:${c};stroke-width:1.4;stroke-dasharray:3 3` }, svg); el('circle', { cx: xs(x), cy: y, r: 4, style: `fill:${c}` }, svg); const t = el('text', { x: xs(x) + (anchor === 'end' ? -7 : 7), y: y + 4, 'text-anchor': anchor || 'start' }, svg); t.textContent = label; t.setAttribute('style', `fill:${c};font-size:12px`); };
+  mark(0.0057, 110, 'var(--muted)', '電壓環（現行）0.006 Hz');
+  mark(5, 150, 'var(--muted)', 'Vo 量測低通 5 Hz');
+  mark(30, 110, 'var(--muted)', '60 Hz 取樣的 Nyquist');
+  mark(120, 70, 'var(--ch1)', 'Vo 漣波 120 Hz');
+  mark(392, 178, 'var(--ch1)', 'Buck LC 392 Hz', 'end');
+  mark(947, 100, 'var(--ch2)', '電流環 fc 947 Hz', 'end');
+  mark(10000, 170, 'var(--muted)', '20 kHz 取樣 Nyquist', 'end');
+  el('line', { x1: l, x2: W - r, y1: axisY, y2: axisY, style: 'stroke:var(--fg);stroke-width:1.2' }, svg);
+  for (let e = -3; e <= 4; e++) { const v = Math.pow(10, e); el('line', { x1: xs(v), x2: xs(v), y1: axisY, y2: axisY + 6, style: 'stroke:var(--fg)' }, svg); const t = el('text', { x: xs(v), y: axisY + 20, 'text-anchor': 'middle' }, svg); t.textContent = v >= 1000 ? (v / 1000) + ' kHz' : v + ' Hz'; t.setAttribute('style', 'fill:var(--muted);font-size:12px;font-family:var(--f-mono)'); }
+  for (let e = -3; e < 4; e++) for (let k = 2; k < 10; k++) { const v = k * Math.pow(10, e); if (v > 20000) continue; el('line', { x1: xs(v), x2: xs(v), y1: axisY, y2: axisY + 3, style: 'stroke:var(--muted)' }, svg); }
+  svg.querySelectorAll('text').forEach(t => { if (!t.getAttribute('style') || !t.getAttribute('style').includes('font-family')) t.style.fontFamily = 'var(--f-body)'; });
+  host.style.overflowX = 'auto'; svg.style.minWidth = '640px';
+})();
+
+// ---------- current loop ----------
+(function () {
+  let L = 1.5658e-3; const f = logspace(1, 4.3, 900);
+  const bL1 = $('ci-L1'), bL2 = $('ci-L2');
+  function draw() {
+    const K = +$('ci-K').value, Td = +$('ci-Td').value * 1e-6;
+    $('ci-Kv').textContent = K.toFixed(1); $('ci-Tdv').textContent = (Td * 1e6).toFixed(0);
+    const T = currentLoop(f, K, L, Td); const mag = T.map(t => 20 * Math.log10(cabs(t))); const ph = unwrapDeg(T.map(t => carg(t) * 180 / Math.PI));
+    const mg = margins(f, T);
+    const xcfg = { log: true, min: 10, max: 20000, ticks: [10, 100, 1000, 10000], fmt: fmtHz, label: 'Hz' };
+    plot($('ci-mag'), { title: '|T_i|（dB）', x: xcfg, y: { min: -40, max: 40, ticks: [-40, -20, 0, 20, 40] }, hlines: [{ y: 0, c: 'var(--muted)' }], bands: [{ x0: 2860, x1: 4150, c: 'var(--ch3)' }], series: [{ x: f, y: mag, c: 'var(--ch2)' }], dots: mg.fc ? [{ x: mg.fc, y: 0, c: 'var(--ch2)' }] : [] });
+    plot($('ci-ph'), { title: '∠T_i（度）', x: xcfg, y: { min: -270, max: -60, ticks: [-270, -180, -90] }, hlines: [{ y: -180, c: 'var(--warn)' }], bands: [{ x0: 2860, x1: 4150, c: 'var(--ch3)' }], series: [{ x: f, y: ph, c: 'var(--ch2)' }], vlines: Td > 0 ? [{ x: 1 / (4 * Td), c: 'var(--warn)', label: '1/(4Td)' }] : [] });
+    $('ci-read').innerHTML = chip('f_c ' + fHz(mg.fc)) + chip('PM ' + f1(mg.pm) + '°', mg.pm > 45 ? 'ok' : 'bad') + chip('GM ' + f1(mg.gm) + ' dB', mg.gm > 6 ? 'ok' : 'bad');
+    const big = L > 1e-3, lo = big ? 8 : 2.5, hi = big ? 10 : 3.5;
+    const iso = mg.pm > 0 ? '單看電流環是穩定的' : '單看電流環就已經不穩定';
+    let v;
+    if (Td < 50e-6) v = iso + '。延遲小於 50 µs 時耦合上限會提高，下面的上限值是以 75 µs 計算。';
+    else if (K <= lo) v = iso + `，而且在與 bus 耦合後的上限（約 ${lo}–${hi}）以內，有裕度。`;
+    else if (K <= hi) v = iso + `，但已接近與 bus 耦合後的上限（約 ${lo}–${hi}）。模擬中 ${big ? 'K = 9.3 勉強可運作、K = 10 失穩' : 'K = 3 可運作、K = 5 失穩'}。`;
+    else v = iso + `，但超過與 bus 耦合後的上限（約 ${hi}），整體系統會失穩。`;
+    $('ci-verdict').textContent = v + '紫色帶為 bus 諧振範圍。';
+  }
+  ['ci-K', 'ci-Td'].forEach(i => $(i).addEventListener('input', draw));
+  bL1.onclick = () => { L = 1.5658e-3; pressGroup([bL1, bL2], bL1); draw(); };
+  bL2.onclick = () => { L = 632e-6; pressGroup([bL1, bL2], bL2); draw(); };
+  draw();
+})();
+
+// ---------- voltage loop ----------
+(function () {
+  let cpl = false; const f = logspace(-3, Math.log10(29.9), 900);
+  const bR = $('vl-R'), bP = $('vl-P');
+  function draw() {
+    const Vkp = +$('vl-kp').value, Vki = +$('vl-ki').value;
+    $('vl-kpv').textContent = Vkp.toFixed(3); $('vl-kiv').textContent = Vki.toFixed(2);
+    const r = voltageLoop(f, { Vm: 163, Co: 2200e-6, Vo: 100, K: 9.3, tau: 0.0318878, Vkp, Vki, Rload: 20, cpl });
+    const mag = r.T.map(t => 20 * Math.log10(cabs(t))); const ph = unwrapDeg(r.T.map(t => carg(t) * 180 / Math.PI));
+    const mg = margins(f, r.T);
+    const xcfg = { log: true, min: 0.001, max: 30, ticks: [0.001, 0.01, 0.1, 1, 10], fmt: v => v, label: 'Hz' };
+    plot($('vl-mag'), { title: '|T_v|（dB）', x: xcfg, y: { min: -60, max: 40, ticks: [-60, -40, -20, 0, 20, 40] }, hlines: [{ y: 0, c: 'var(--muted)' }], series: [{ x: f, y: mag, c: 'var(--ch4)' }], dots: mg.fc ? [{ x: mg.fc, y: 0, c: 'var(--ch4)' }] : [], vlines: [{ x: r.pole, c: 'var(--ch1)', label: '受控體極點' }] });
+    plot($('vl-ph'), { title: '∠T_v（度）', x: xcfg, y: { min: -360, max: 0, ticks: [-360, -270, -180, -90, 0] }, hlines: [{ y: -180, c: 'var(--warn)' }], series: [{ x: f, y: ph, c: 'var(--ch4)' }] });
+    $('vl-read').innerHTML = chip('G_d ' + r.Gd.toFixed(1) + ' W/V') + chip('f_c ' + fHz(mg.fc)) + chip('PM ' + f1(mg.pm) + '°', mg.pm !== null && mg.pm > 45 ? 'ok' : 'bad') + chip('GM ' + f1(mg.gm) + ' dB', mg.gm !== null && mg.gm > 6 ? 'ok' : 'bad') + (mg.fc && mg.fc < 0.05 ? chip('頻寬過低：積分時間常數約 ' + (1 / (2 * Math.PI * mg.fc)).toFixed(0) + ' s', 'bad') : '');
+  }
+  ['vl-kp', 'vl-ki'].forEach(i => $(i).addEventListener('input', draw));
+  bR.onclick = () => { cpl = false; pressGroup([bR, bP], bR); draw(); };
+  bP.onclick = () => { cpl = true; pressGroup([bR, bP], bP); draw(); };
+  document.querySelectorAll('button[data-v]').forEach(b => b.onclick = () => { const [a, c] = b.dataset.v.split(','); $('vl-kp').value = a; $('vl-ki').value = c; draw(); });
+  draw();
+})();
+
+// ---------- voltage step ----------
+(function () {
+  const btn = { g1: $('vs-g1'), g2: $('vs-g2'), g3: $('vs-g3') };
+  function draw(tag) {
+    pressGroup(Object.values(btn), btn[tag]);
+    const sim = DATA.vstep[tag + '_sim'], lin = DATA.vstep[tag + '_lin'];
+    const x = { min: 0.5, max: 9, ticks: [1, 3, 5, 7, 9], label: 's' };
+    plot($('vs-vo'), { title: 'V_o（量測後，V）', x, y: { min: 90, max: 112, ticks: [90, 95, 100, 105, 110] }, hlines: [{ y: 100, c: 'var(--muted)' }], vlines: [{ x: 1, c: 'var(--muted)', label: '250 W' }, { x: 5, c: 'var(--muted)', label: '500 W' }], series: [{ x: sim.map(p => p[0]), y: sim.map(p => p[1]), c: 'var(--ch2)' }, { x: lin.map(p => p[0]), y: lin.map(p => p[1]), c: 'var(--ch1)', dash: true }] });
+    plot($('vs-ip'), { title: 'I_pre（A）', x, y: { min: 2, max: 8, ticks: [2, 4, 6, 8] }, series: [{ x: sim.map(p => p[0]), y: sim.map(p => p[2]), c: 'var(--ch2)' }, { x: lin.map(p => p[0]), y: lin.map(p => p[2]), c: 'var(--ch1)', dash: true }] });
+  }
+  Object.entries(btn).forEach(([k, b]) => b.onclick = () => draw(k));
+  draw('g2');
+})();
+
+// ---------- buck ----------
+(function () {
+  let sign = 1; const f = logspace(0, 4, 1600);
+  const bP = $('bk-plus'), bM = $('bk-minus');
+  function draw() {
+    const Kp = +$('bk-kp').value, Ki = +$('bk-ki').value, rt = +$('bk-r').value / 1000;
+    $('bk-kpv').textContent = Kp.toFixed(3); $('bk-kiv').textContent = Ki.toFixed(0); $('bk-rv').textContent = (rt * 1000).toFixed(0);
+    const p = { Vbus: 170, L: 75e-6, C: 2200e-6, R: 20, rC: rt * 0.4, rL: rt * 0.6, Kp, Ki, sign, Td: 75e-6 };
+    const T = buckLoop(f, p); const mag = T.map(t => 20 * Math.log10(cabs(t))); const ph = unwrapDeg(T.map(t => carg(t) * 180 / Math.PI));
+    const mg = margins(f, T);
+    const Z0 = Math.sqrt(75e-6 / 2200e-6), Q = 1 / (Z0 / 20 + rt / Z0);
+    const xcfg = { log: true, min: 1, max: 10000, ticks: [1, 10, 100, 1000, 10000], fmt: fmtHz, label: 'Hz' };
+    plot($('bk-mag'), { title: '|T_buck|（dB）', x: xcfg, y: { min: -80, max: 40, ticks: [-80, -60, -40, -20, 0, 20, 40] }, hlines: [{ y: 0, c: 'var(--muted)' }], vlines: [{ x: 392, c: 'var(--ch1)', label: 'f0' }], series: [{ x: f, y: mag, c: sign > 0 ? 'var(--ch4)' : 'var(--warn)' }] });
+    plot($('bk-ph'), { title: '∠T_buck（度）', x: xcfg, y: { min: -450, max: 180, ticks: [-360, -180, 0, 180] }, hlines: [{ y: -180, c: 'var(--warn)' }], vlines: [{ x: 392, c: 'var(--ch1)', label: 'f0' }], series: [{ x: f, y: ph, c: sign > 0 ? 'var(--ch4)' : 'var(--warn)' }] });
+    let html = chip('Q ≈ ' + Q.toFixed(1)) + chip('Q·Kp ≈ ' + (Q * Kp).toFixed(2), Q * Kp < 0.5 ? 'ok' : 'bad');
+    let verdict;
+    if (sign > 0) {
+      html += chip('f_c ' + fHz(mg.fc)) + chip('PM ' + f1(mg.pm) + '°', mg.pm !== null && mg.pm > 45 ? 'ok' : 'bad') + chip('GM ' + f1(mg.gm) + ' dB', mg.gm !== null && mg.gm > 6 ? 'ok' : 'bad');
+      verdict = (mg.gm !== null && mg.gm < 0) ? '諧振峰超過 0 dB 時相位已過 −180°：在 392 Hz 附近振盪發散。降低 Kp，或增加 ESR/DCR。' : '直流為負回授，諧振峰被壓在 0 dB 以下：穩定。';
+    } else {
+      if (Ki > 0) verdict = '直流為正回授，積分器會一路累加：Vo 必定崩到 0 或衝到上限。';
+      else if (Kp >= 1) verdict = '直流為正回授且 Kp ≥ 1：閉迴路直流增益 1/(1−Kp) 變號，發散。';
+      else verdict = `直流為正回授但 Kp < 1：不會發散，但所有誤差被放大 ${(1 / (1 - Kp)).toFixed(2)} 倍，而且不能加積分。`;
+      html += chip('直流相位 −180°（正回授）', 'bad');
+    }
+    $('bk-read').innerHTML = html; $('bk-verdict').textContent = verdict;
+  }
+  ['bk-kp', 'bk-ki', 'bk-r'].forEach(i => $(i).addEventListener('input', draw));
+  bP.onclick = () => { sign = 1; pressGroup([bP, bM], bP); draw(); };
+  bM.onclick = () => { sign = -1; pressGroup([bP, bM], bM); draw(); };
+  draw();
+  const B = DATA.buck; const x = { min: 0, max: 0.25, ticks: [0, 0.05, 0.1, 0.15, 0.2, 0.25], label: 's' };
+  plot($('bt-a'), { title: 'V_o（V）', x, y: { min: -50, max: 250, ticks: [0, 100, 200] }, vlines: [{ x: 0.1, c: 'var(--muted)', label: '負載加倍' }], series: [{ x: B.t, y: B.plus_ideal, c: 'var(--ch3)', w: 1.2 }, { x: B.t, y: B.minus_ideal, c: 'var(--ch2)', w: 2 }] });
+  plot($('bt-b'), { title: 'V_o（V）', x, y: { min: -10, max: 120, ticks: [0, 50, 100] }, vlines: [{ x: 0.1, c: 'var(--muted)', label: '負載加倍' }], series: [{ x: B.t, y: B.plusKi_par, c: 'var(--ch4)', w: 2 }, { x: B.t, y: B.minusKi_par, c: 'var(--warn)', w: 2 }] });
+})();
+
+// ---------- system waveforms ----------
+(function () {
+  const bOk = $('sw-ok'), bBad = $('sw-bad');
+  function draw(tag) {
+    pressGroup([bOk, bBad], tag === 'ok' ? bOk : bBad);
+    const D = DATA[tag]; const x = { min: 0, max: 16.67, ticks: [0, 4, 8, 12, 16], label: 'ms' };
+    const ilim = tag === 'ok' ? 9 : 100, vmax = tag === 'ok' ? 230 : 400;
+    plot($('sw-i'), { title: '輸入電流（A）', x, y: { min: -ilim, max: ilim, ticks: tag === 'ok' ? [-8, -4, 0, 4, 8] : [-100, -50, 0, 50, 100] }, series: [{ x: D.t, y: D.vac.map(v => v / 25), c: 'var(--ch1)', w: 1.2 }, { x: D.t, y: D.iref, c: 'var(--ch3)', dash: true, w: 1.4 }, { x: D.t, y: D.iin, c: 'var(--ch2)' }] });
+    plot($('sw-v'), { title: '電壓（V）', x, y: { min: 0, max: vmax, ticks: tag === 'ok' ? [0, 50, 100, 150, 200] : [0, 100, 200, 300, 400] }, series: [{ x: D.t, y: D.Vref, c: 'var(--ch3)', dash: true, w: 1.4 }, { x: D.t, y: D.Vbus, c: 'var(--ch2)' }, { x: D.t, y: D.Vo, c: 'var(--ch4)' }] });
+    $('sw-cap').textContent = tag === 'ok' ? '穩態一個 line cycle（500 W、K = 9.3、L = 1.566 mH、一拍延遲）：THD 4.5%、PF 0.998、Vbus 與 Vref 最大差 9.8 V、Vo 峰對峰 6 V。' : '同樣條件，只把 slew 限制改回 0.01：零交越後 duty 追不上前饋，電流衝到數十安培，系統無法運作（注意縱軸刻度放大了十倍）。';
+  }
+  bOk.onclick = () => draw('ok'); bBad.onclick = () => draw('sw');
+  draw('ok');
+})();
+</script>
