@@ -134,8 +134,15 @@ int   starset_up_prev = 0;
 //==================================================================
 #define kp 2.5
 #define ki 0.5
-#define Vkp 0.1
-#define Vki 0.01
+
+// PFC outer voltage loop (VoltageLoop, one update per line cycle).
+// Was 0.1 / 0.01, which put the crossover at 0.006 Hz - an integral time
+// constant near 28 s, so a load step left Vo off by ~9 V for tens of seconds
+// (docs/control_analysis README section 4.5/4.6). 0.03 / 1 moves the crossover
+// to 0.54 Hz with 88 deg phase margin: back to 100 V in about a second, still
+// far below the 120 Hz bus ripple and the 60 Hz sampling this loop runs at.
+#define Vkp 0.03
+#define Vki 1.0
 
 //----- duty slew-rate limiter (insurance against a single-cycle jump) --
 // duty_cap already bounds duty's magnitude, but nothing previously stopped
@@ -144,10 +151,20 @@ int   starset_up_prev = 0;
 // worst-case first cycle (e.g. wrong slow-leg direction) to ramp in over
 // several cycles instead of slamming the full volt-seconds in one shot -
 // gives protect() a chance to catch a real fault at a lower peak current
-// before it dumps into Vbus. 0.01/cycle -> ~15 cycles (0.75ms) to reach the
-// DUTY_CAP_START startup duty_cap; independent of and much faster than the
-// existing ~0.7s Ipre_max ramp, so it doesn't slow down normal soft-start.
-#define DUTY_SLEW_MAX 0.01f
+// before it dumps into Vbus.
+//
+// Two tiers, because one value cannot serve both jobs (docs/control_analysis
+// README section 3). The feedforward's own slope near the zero crossing is
+//     |d(d_ff)/dt| = w*Vm/Vref = 377*163/140 = 439/s -> 0.022 per 50us cycle
+// so a 0.01 limit only tracks HALF of what the feedforward demands there: the
+// duty falls behind every crossing and the current never gets shaped. The
+// simulation puts that at THD 86% / PF 0.21, and the bench waveform shows the
+// same thing - current in ramp segments instead of a sine.
+//   0.01 keeps the startup protection, where the current is still small.
+//   0.03 is the steady-state value: >=0.025 restores THD 4.4% / PF 0.998.
+// Switched on Ipre_max, which is already the soft-start progress indicator.
+#define DUTY_SLEW_START 0.01f
+#define DUTY_SLEW_RUN   0.03f
 
 // Startup duty_cap floor (see currentloop()). duty is the boost's STORING
 // duty, so Vbus = Vac_in/(1-duty): the steady-state need runs from ~0.205 at
@@ -173,10 +190,24 @@ float Vref_start = 0;
 // measured bus cancels it and holds the loop bandwidth constant at every
 // bus voltage - a fixed Kp instead detunes the loop everywhere except the
 // one bus it was designed at.
-//   K = 2*pi*fc*L = 2*pi*945*0.0015658 ~= 9.3  (L=1.5658mH measured)
+//   K = 2*pi*fc*L,  L = 1.566 mH (confirmed 2026-10-07)
+//
+// K is NOT set by the current loop alone. On its own the ceiling is where fc
+// reaches 1/(4*Td) = 3.33 kHz, i.e. K ~= 33. What actually binds is the 10uF
+// bus resonating against the Buck inductor (2.9-4.2 kHz) sitting right where
+// the delayed loop looks like a negative resistance. Freezing the four-state
+// system at each instantaneous |vac| gives K_max 8.5-12, worst at |vac| ~
+// 100 V where it is 8.5 (docs/control_analysis README section 2).
+//
+// 7.0 -> fc = K/(2*pi*L) = 712 Hz, leaving ~1.5 of margin under that 8.5.
+// The previous 9.3 was already past it and only survived because the dwell
+// near |vac|=100 V is short; whole-system sim: K=7 THD 5.8%, K=9.3 THD 4.5%,
+// K=10 THD 38% (unstable). 1.3 points of THD buys the margin back, and the
+// ESR/DCR behind that 8.5 are still assumed values, not measured.
+//
 // Floor the divisor (not Kp) at 10V, same as PSIM: below that the bus sits
 // under the line peak and the boost isn't regulating anyway.
-#define CURRENT_LOOP_K       9.3f
+#define CURRENT_LOOP_K       7.0f
 #define CURRENT_LOOP_VBUS_MIN 10.0f
 #define CURRENT_LOOP_KP_MIN   0.001f
 
@@ -768,10 +799,13 @@ void currentloop(void)
                                     // under 50/2250 = 2.2%, so below that the low-side
                                     // arm never fires at all - keep clear of that edge
 
-    // Slew-rate insurance (see DUTY_SLEW_MAX above) - clamp this cycle's step
-    // relative to what was actually commanded last cycle.
-    if(duty > duty_prev_cmd + DUTY_SLEW_MAX) duty = duty_prev_cmd + DUTY_SLEW_MAX;
-    if(duty < duty_prev_cmd - DUTY_SLEW_MAX) duty = duty_prev_cmd - DUTY_SLEW_MAX;
+    // Slew-rate limit (see DUTY_SLEW_START/RUN above) - clamp this cycle's step
+    // relative to what was actually commanded last cycle. Tight while the
+    // soft-start ramp is still running, then opened up so the duty can keep
+    // pace with the feedforward through the zero crossing.
+    float duty_slew = (Ipre_max < 8.0f) ? DUTY_SLEW_START : DUTY_SLEW_RUN;
+    if(duty > duty_prev_cmd + duty_slew) duty = duty_prev_cmd + duty_slew;
+    if(duty < duty_prev_cmd - duty_slew) duty = duty_prev_cmd - duty_slew;
     duty_prev_cmd = duty;
 }
 
@@ -1054,6 +1088,14 @@ void VoltageLoop(void)
         {
             Ve = Vout_ref - Vo_filt;
             Ipre = Ipre_prev + Vkp * (Ve - Ve_prev) + Vki * 0.01667 * Ve;
+
+            // Anti-windup: clamp BEFORE storing the state. Ipre_prev used to
+            // take the raw value, so while the output sat on a limit the
+            // velocity-form integrator kept accumulating past it - and had to
+            // unwind all the way back before Ipre would leave the limit again.
+            if(Ipre > Ipre_max) Ipre = Ipre_max;
+            if(Ipre < 1)        Ipre = 1;
+
             Ve_prev = Ve;
             Ipre_prev = Ipre;
             triggered = 1;
