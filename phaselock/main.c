@@ -83,6 +83,7 @@ int PLLcount = 0, PLLERRcount = 0;
 
 //----- Buck soft-start ramp state -----
 float Vout_ref = VOUT_REF_START;
+float Vout_ref_start = VOUT_REF_START;   // latched from Vo_filt before the ramp starts
 int   buck_ramp_count = 0;
 
 //----- Buck duty soft-start (see Busloop) -----------------------------
@@ -911,12 +912,22 @@ void Busloop(void)
 }
 
 //==================================================================
-// UpdateVoutRefRamp - soft-starts the shared Vout_ref target from VOUT_REF_START up to
-// VOUT_REF_FINAL over BUCK_RAMP_CYCLES cycles, once both switches are on - the same
-// condition Busloop() uses to enter its Vout_ref/Vref branch, so the ramp starts
-// exactly when that branch starts reading it. Resets back to the start value whenever
-// either switch drops, so every fresh start begins a clean ramp rather than resuming
-// mid-ramp.
+// UpdateVoutRefRamp - the PFC outer loop's target. Vout_ref is read ONLY by
+// VoltageLoop()'s Ve = Vout_ref - Vo_filt; the Buck runs off its own
+// Vout_soft, so the departure point chosen here only shapes that one loop.
+//
+// It used to start at a fixed VOUT_REF_START (10 V), which made the loop
+// dead on handover: GPIO10's preload already has the Buck delivering more
+// than 10 V by the time GPIO11 closes, so Ve began NEGATIVE. The outer loop
+// read that as "output too high", drove Ipre down onto its floor, and sat
+// there until the ramp had climbed past the real output - seconds of doing
+// nothing. Anti-windup stopped it getting stuck there, but did not stop it
+// starting on the wrong side of zero.
+//
+// So the ramp departs from the measured output instead: while the stage is
+// not running, Vout_ref_start keeps re-latching Vo_filt, giving Ve ~ 0 at
+// handover and a positive, growing error from the first line cycle on.
+// Same bumpless-transfer idea as Vref_start in UpdateVref().
 //==================================================================
 void UpdateVoutRefRamp(void)
 {
@@ -925,7 +936,7 @@ void UpdateVoutRefRamp(void)
         if(buck_ramp_count < BUCK_RAMP_CYCLES)
         {
             buck_ramp_count++;
-            Vout_ref = VOUT_REF_START + (VOUT_REF_FINAL - VOUT_REF_START) *
+            Vout_ref = Vout_ref_start + (VOUT_REF_FINAL - Vout_ref_start) *
                        ((float)buck_ramp_count / (float)BUCK_RAMP_CYCLES);
         }
         else
@@ -936,7 +947,16 @@ void UpdateVoutRefRamp(void)
     else
     {
         buck_ramp_count = 0;
-        Vout_ref = VOUT_REF_START;
+
+        // Re-latch the present output until the ramp actually starts. Floored
+        // at VOUT_REF_START so a cold, unpowered output cannot park the target
+        // at 0 V, and capped at VOUT_REF_FINAL so an output already above the
+        // final target never produces a ramp that runs backwards.
+        Vout_ref_start = Vo_filt;
+        if(Vout_ref_start < VOUT_REF_START) Vout_ref_start = VOUT_REF_START;
+        if(Vout_ref_start > VOUT_REF_FINAL) Vout_ref_start = VOUT_REF_FINAL;
+
+        Vout_ref = Vout_ref_start;
     }
 }
 
