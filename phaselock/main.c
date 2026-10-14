@@ -20,7 +20,6 @@ void lowpass(void);
 void debun(void);
 
 void UpdateVref(void);        // shared boost-bus reference used by both currentloop() and Busloop()
-void UpdateVoutRefRamp(void); // soft-starts the shared Vout_ref target once the main switch is on
 void SetSafeOutputs(void);    // full safe state (PFC + Buck) - used by turnoff() on a real fault trip
 void SetSafeOutputsPFC(void); // PFC-leg-only safe state - used by Hold(), leaves Buck's own output alone
 void turnoff(void);          // hardware trip (protection event)
@@ -70,21 +69,12 @@ int startupDelayCount = 0;
 int PLL_flag = 0;
 int PLLcount = 0, PLLERRcount = 0;
 
-//----- Buck soft-start ramp (shared Vout_ref target for VoltageLoop() and Busloop()) -----
-// Once the main switch (SW1 -> switch_state) turns on, Vout_ref ramps from VOUT_REF_START
-// to VOUT_REF_FINAL over BUCK_RAMP_CYCLES ADC-ISR cycles (~5s @ 20kHz, per PLL()'s dt=0.00005).
-// Both the PFC outer voltage loop and the Buck feedforward read this SAME variable so they
-// always target the same setpoint - if they used different/unsynced targets, the PFC's Ipre
-// and the Buck's duty would be aiming at different output levels during the ramp. Keep this
-// duration matched to VOUT_SOFT_STEP's below, or the two stages desync mid-ramp.
-#define VOUT_REF_START   10.0f
-#define VOUT_REF_FINAL   100.0f
-#define BUCK_RAMP_CYCLES 100000
-
-//----- Buck soft-start ramp state -----
-float Vout_ref = VOUT_REF_START;
-float Vout_ref_start = VOUT_REF_START;   // latched from Vo_filt before the ramp starts
-int   buck_ramp_count = 0;
+//----- PFC outer-loop target -----
+// Mirrors Vout_soft, assigned at the end of Busloop(). There is one soft-start
+// ramp in this design - the Buck's - and the PFC voltage loop simply aims at
+// it. See the comment at that assignment for what the second, independent ramp
+// used to do.
+float Vout_ref = 0;
 
 //----- Buck duty soft-start (see Busloop) -----------------------------
 // The Buck's own target, separate from Vout_ref (which the PFC outer loop
@@ -98,9 +88,46 @@ int   buck_ramp_count = 0;
 #define VOUT_SOFT_STEP    0.0008f
 float Vout_soft = 0;
 
+//----- one-stop debug snapshot -------------------------------------
+// Everything worth reading at a glance, in one struct. Add `dbg` to the CCS
+// Expressions view once and expand it: every value appears with its own name,
+// and the whole block copies in a single selection. Refreshed at the end of
+// every ADC ISR, including after a trip, so the latched state stays visible.
+struct dbg_snapshot {
+    float Ipre, Ipre_max;        // current-amplitude command and its soft-start ceiling
+    float Vref, Vbus_real;       // bus target vs actual
+    float Ve, Vout_ref;          // outer-loop error and its target
+    float Vout_soft, Vout_real;  // Buck command vs actual output
+    float Vo_filt;               // what the outer loop actually compares against
+    float b1, Iin_real;          // line reconstruction and input current
+    float duty, Vbus_duty;       // PFC and Buck duty
+    float Ikp;                   // current-loop gain this cycle (K/Vbus)
+    int   PLL_flag, system_running, starset_up, buck_started;
+    int   protectFLAG, Iin_protectFLAG, Vbus_protectFLAG;
+    int   switch_state, buck_switch_state, shutdown_latch;
+
+    // Extremes over the whole run, since a single cycle may not be
+    // representative and there is no way to watch this live. These only ever
+    // grow - zero them by hand in CCS before a run you want clean numbers for.
+    float Iin_peak;              // max |Iin_real|
+    float Vbus_max, Vbus_min;    // bus excursion
+    float duty_max, duty_min;
+    float Ipre_seen;             // highest Ipre the outer loop ever asked for
+};
+struct dbg_snapshot dbg;
+
 //----- latched protection -----------------------------------------
+// Bus trip at 300 V. The old 230 V sat only 8% above the 212 V the bus actually
+// reaches in normal running - the |b1|+40 envelope peaks at 201 V and 10 uF
+// lets it swing - so normal operation was close enough to trip on its own.
+// 300 V is 40% clear of that, and still well under the 450 V bus capacitor and
+// far under the 900 V C3M0065090 switches.
+#define VBUS_TRIP_V     300.0f
+#define VBUS_OV_CONFIRM 2       // consecutive samples (see protect())
+
 int protectFLAG = 0;
 int Iin_protectFLAG = 0, Vbus_protectFLAG = 0;
+int vbus_ov_count = 0;
 float Iin_protect_value = 0, Vbus_protect_value = 0;   // snapshot at trip time, for debugging
 
 //----- zero-cross (edge-detected) ----------------------------------
@@ -161,20 +188,43 @@ int   starset_up_prev = 0;
 // duty falls behind every crossing and the current never gets shaped. The
 // simulation puts that at THD 86% / PF 0.21, and the bench waveform shows the
 // same thing - current in ramp segments instead of a sine.
-//   0.01 keeps the startup protection, where the current is still small.
 //   0.03 is the steady-state value: >=0.025 restores THD 4.4% / PF 0.998.
 // Switched on Ipre_max, which is already the soft-start progress indicator.
-#define DUTY_SLEW_START 0.01f
+//
+// The soft-start value was 0.01 on the same "keep the startup protection"
+// reasoning, but the demand above applies during soft-start too, and that lasts
+// the whole 0.7 s Ipre_max ramp. Measured 10/14: duty started correctly at 0.950
+// against a required 0.969, then fell behind by 0.01 every cycle until it was
+// 0.219 high, which over-boosts - Vbus = |vac|/(1-duty) reached 246 V and
+// tripped the 230 V protection. The slow start value was not protecting
+// anything, it was blocking a descent the converter needs. The bumpless seed
+// below is what makes the start safe, so both stages can use the same rate.
+#define DUTY_SLEW_START 0.03f
 #define DUTY_SLEW_RUN   0.03f
 
-// Startup duty_cap floor (see currentloop()). duty is the boost's STORING
-// duty, so Vbus = Vac_in/(1-duty): the steady-state need runs from ~0.205 at
-// the line peak (1 - 155/195) up towards 1.0 at the zero crossing. The cap
-// exists to blunt that near-1 demand around the crossing during soft-start,
-// but it has to stay above the peak's 0.205 or there is no reachable
-// operating point at all and the loop just saturates at the floor.
-#define DUTY_CAP_START 0.4f
+// Startup duty_cap floor (see currentloop()). duty is the boost's STORING duty,
+// so equilibrium is |vac| = (1-duty)*Vbus, i.e. duty = 1 - |vac|/Vbus. Near the
+// zero crossing |vac| -> 0 and the REQUIRED duty approaches 1.0.
+//
+// That near-1 demand is not something to blunt - it is the operating point. High
+// duty there is harmless (the inductor is shorted across a few volts, so di/dt is
+// tiny); capping it low is what is dangerous, because it puts -(1-duty)*Vbus
+// across the inductor and drives the current negative. Measured at 0.4: the
+// inductor saw about -100 V just after the crossing and the current reached
+// -10.5 A in 350 us, which is what the cap predicts for |vac| ~ 17 V.
+//
+// sim/sysim.c, the model the control analysis was validated against, has no cap
+// at all - duty is free up to the 0.98 clamp. Keeping this near 0.98 makes the
+// firmware match that model.
+//
+// A low cap also pins the bus: holding duty at the cap forces the steady state
+// Vbus = |vac|/(1-cap), so 0.4 locks it at 155/0.6 = 258 V and the 230 V
+// protection can only ever trip. Measured twice: Vbus peaked at 258.09 V on
+// 10/01, and tripped at 246 V climbing toward the same point on 10/14.
+#define DUTY_CAP_START 0.95f
 float duty_prev_cmd = 0;
+int   duty_seed_pending = 1;   // see currentloop(): seed the slew limiter on the first
+                               // activated cycle instead of ramping up from zero
 
 //----- Vref startup ramp (see UpdateVref) -----------------------------
 // Vref departs from wherever the bus actually sits when switching begins
@@ -340,6 +390,11 @@ int main(void)
     // AFTER the ADC is fully configured above - it used to run before, so the
     // very first SOC pulses could hit an unconfigured ADC.
     //--------------------------------------------------------------
+    // Minimum trackers must start high or the zero-initialised value is already
+    // the smallest and they never update.
+    dbg.Vbus_min = 1.0e6f;
+    dbg.duty_min = 1.0e6f;
+
     IER |= M_INT1;
     InitEPwmTimer();
     PieCtrlRegs.PIEIER1.bit.INTx1 = 1;
@@ -546,8 +601,7 @@ __interrupt void adc_isr(void)
         {
             system_running = 0;
             Vbus_duty = 0;
-            buck_ramp_count = 0;
-            Vout_ref = VOUT_REF_START;
+            Vout_ref = 0;
             Vout_soft = 0;                   // next handover re-seeds from the preload
             buck_started = 0;
             Hold();                          // PFC off + reset all PFC control state
@@ -573,7 +627,6 @@ __interrupt void adc_isr(void)
         }
 
         UpdateVref();          // shared by currentloop() and Busloop() - must run before both
-        UpdateVoutRefRamp();   // soft-starts the shared Vout_ref target once switch_state && buck_switch_state
         Busloop();
 
         //--------------------------------------------------------------
@@ -602,13 +655,8 @@ __interrupt void adc_isr(void)
                 VoltageLoop();
                 currentloop();
 
-                // Independent of currentloop()'s own [0.03, 0.97] clamp on purpose:
-                // this is the last bound before the CMPA writes below, and both the
-                // D and (1-D) branches need final_duty inside [0,1] or the Uint16
-                // register lands past TBPRD (or wraps, for a negative float) and the
-                // compare stops matching - which latches a gate on instead of switching.
                 float final_duty = duty;
-                if(final_duty > 0.95) final_duty = 0.95;
+                if(final_duty > 0.97) final_duty = 0.97;
                 if(final_duty < 0.03) final_duty = 0.03;
 
                 //----- startup capture (debug) -----
@@ -682,6 +730,44 @@ __interrupt void adc_isr(void)
     {
         Hold();
     }
+
+    // Only refresh while actually switching, so the snapshot survives the stop:
+    // the bench cannot read this live (JTAG is unplugged while the stage is
+    // energised), so after power-down dbg must still hold the last RUNNING
+    // cycle rather than an idle one. Frozen on a trip for the same reason.
+    // Measurements refresh only while actually switching, so the snapshot
+    // survives the stop: the bench cannot read this live (JTAG is unplugged
+    // while the stage is energised), so after power-down dbg must still hold
+    // the last RUNNING cycle rather than an idle one. Frozen on a trip too.
+    if(system_running && !protectFLAG)
+    {
+        if(fabsf(Iin_real) > dbg.Iin_peak) dbg.Iin_peak  = fabsf(Iin_real);
+        if(Vbus_real > dbg.Vbus_max)       dbg.Vbus_max  = Vbus_real;
+        if(Vbus_real < dbg.Vbus_min)       dbg.Vbus_min  = Vbus_real;
+        if(duty > dbg.duty_max)            dbg.duty_max  = duty;
+        if(duty < dbg.duty_min)            dbg.duty_min  = duty;
+        if(Ipre > dbg.Ipre_seen)           dbg.Ipre_seen = Ipre;
+
+        dbg.Ipre      = Ipre;       dbg.Ipre_max  = Ipre_max;
+        dbg.Vref      = Vref;       dbg.Vbus_real = Vbus_real;
+        dbg.Ve        = Ve;         dbg.Vout_ref  = Vout_ref;
+        dbg.Vout_soft = Vout_soft;  dbg.Vout_real = Vout_real;
+        dbg.Vo_filt   = Vo_filt;
+        dbg.b1        = b1;         dbg.Iin_real  = Iin_real;
+        dbg.duty      = duty;       dbg.Vbus_duty = Vbus_duty;
+        dbg.Ikp       = Ikp;
+    }
+
+    // Flags stay live - they are how you tell WHY it stopped, so they must not
+    // be frozen along with the measurements above.
+    dbg.PLL_flag  = PLL_flag;   dbg.system_running = system_running;
+    dbg.starset_up = starset_up; dbg.buck_started  = buck_started;
+    dbg.protectFLAG = protectFLAG;
+    dbg.Iin_protectFLAG = Iin_protectFLAG;
+    dbg.Vbus_protectFLAG = Vbus_protectFLAG;
+    dbg.switch_state = switch_state;
+    dbg.buck_switch_state = buck_switch_state;
+    dbg.shutdown_latch = shutdown_latch;
 
     AdcRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
     PieCtrlRegs.PIEACK.all = PIEACK_GROUP1;
@@ -800,6 +886,23 @@ void currentloop(void)
                                     // under 50/2250 = 2.2%, so below that the low-side
                                     // arm never fires at all - keep clear of that edge
 
+    // Bumpless transfer for the slew limiter, same idea as UpdateVref()'s
+    // Vref_start, and the Vout_ref_start latch that used to sit in its own ramp.
+    // Hold() used to leave
+    // duty_prev_cmd at 0, so the first activated cycle started a whole half
+    // cycle below the feedforward and the limiter spent ~37 cycles (1.85 ms)
+    // climbing to meet it. Over that climb the inductor sees
+    // |vac| - (1-duty)*Vbus with duty far too small, i.e. about -120 V, and the
+    // current is driven hard negative - the slew limit becomes the fault rather
+    // than the protection. Starting from this cycle's own value means there is
+    // nothing to catch up, and the limiter does only what it is for: bounding
+    // the rate of change from here on.
+    if(duty_seed_pending)
+    {
+        duty_prev_cmd = duty;
+        duty_seed_pending = 0;
+    }
+
     // Slew-rate limit (see DUTY_SLEW_START/RUN above) - clamp this cycle's step
     // relative to what was actually commanded last cycle. Tight while the
     // soft-start ramp is still running, then opened up so the duty can keep
@@ -855,6 +958,20 @@ void UpdateVref(void)
 
     Vref = Vref_start + (vref_full - Vref_start) * ramp;
 
+    // A boost cannot hold its bus below the instantaneous line - once
+    // |vac| > Vbus the body diodes conduct and the line pushes the bus up
+    // regardless of duty. So any Vref under vref_full (= |b1|+40) is an
+    // unreachable target, and aiming at one just saturates both loops.
+    //
+    // That is what the ramp was doing: Vref_start latches the bus at the
+    // first activated cycle, but the Buck preload has already dragged it
+    // below the line peak (measured 140 V against a 153 V peak), and
+    // Ipre_max only reaches 1.17 in the first 16.65 ms, so ramp is 0.024 and
+    // Vref stays pinned near 140 V for the whole 0.7 s soft-start. Measured
+    // consequence: Ipre at its floor of 1, duty at its floor of 0.05, and the
+    // bus still climbing 140 -> 212 V because nothing could stop it.
+    if(Vref < vref_full) Vref = vref_full;
+
     if(Vref < VREF_MIN) Vref = VREF_MIN;
 }
 
@@ -909,57 +1026,21 @@ void Busloop(void)
         Vbus_duty = 0;
         Vout_soft = 0;
     }
+
+    // The PFC outer loop aims at whatever the Buck is currently commanded to
+    // deliver, so Ve = Vout_soft - Vo_filt reads as "is the bus actually
+    // supplying what this stage was told to pass".
+    //
+    // These used to be two independent ramps towards the same 100 V -
+    // buck_ramp_count here and Vout_soft's own per-cycle step - and nothing
+    // kept them in step. Measured once they had: Vout_soft at 100 V with
+    // Vout_ref still at 30 V, so Ve sat at -70 V and pinned Ipre on its floor
+    // for an entire run (Ipre_seen never left 1.0). Sharing one value removes
+    // the drift by construction instead of matching two sets of ramp constants.
+    // Assigned after Vout_soft is updated, so VoltageLoop() - which runs later
+    // in the ISR - reads this cycle's value.
+    Vout_ref = Vout_soft;
 }
-
-//==================================================================
-// UpdateVoutRefRamp - the PFC outer loop's target. Vout_ref is read ONLY by
-// VoltageLoop()'s Ve = Vout_ref - Vo_filt; the Buck runs off its own
-// Vout_soft, so the departure point chosen here only shapes that one loop.
-//
-// It used to start at a fixed VOUT_REF_START (10 V), which made the loop
-// dead on handover: GPIO10's preload already has the Buck delivering more
-// than 10 V by the time GPIO11 closes, so Ve began NEGATIVE. The outer loop
-// read that as "output too high", drove Ipre down onto its floor, and sat
-// there until the ramp had climbed past the real output - seconds of doing
-// nothing. Anti-windup stopped it getting stuck there, but did not stop it
-// starting on the wrong side of zero.
-//
-// So the ramp departs from the measured output instead: while the stage is
-// not running, Vout_ref_start keeps re-latching Vo_filt, giving Ve ~ 0 at
-// handover and a positive, growing error from the first line cycle on.
-// Same bumpless-transfer idea as Vref_start in UpdateVref().
-//==================================================================
-void UpdateVoutRefRamp(void)
-{
-    if(switch_state && buck_switch_state)
-    {
-        if(buck_ramp_count < BUCK_RAMP_CYCLES)
-        {
-            buck_ramp_count++;
-            Vout_ref = Vout_ref_start + (VOUT_REF_FINAL - Vout_ref_start) *
-                       ((float)buck_ramp_count / (float)BUCK_RAMP_CYCLES);
-        }
-        else
-        {
-            Vout_ref = VOUT_REF_FINAL;
-        }
-    }
-    else
-    {
-        buck_ramp_count = 0;
-
-        // Re-latch the present output until the ramp actually starts. Floored
-        // at VOUT_REF_START so a cold, unpowered output cannot park the target
-        // at 0 V, and capped at VOUT_REF_FINAL so an output already above the
-        // final target never produces a ramp that runs backwards.
-        Vout_ref_start = Vo_filt;
-        if(Vout_ref_start < VOUT_REF_START) Vout_ref_start = VOUT_REF_START;
-        if(Vout_ref_start > VOUT_REF_FINAL) Vout_ref_start = VOUT_REF_FINAL;
-
-        Vout_ref = Vout_ref_start;
-    }
-}
-
 
 void SetSafeOutputsPFC(void)
 {
@@ -1004,7 +1085,8 @@ void Hold(void)
     Iref = 0;
     Ifb = 0;
     duty = 0;
-    duty_prev_cmd = 0;   // so the slew limiter also ramps from true zero on the next start
+    duty_seed_pending = 1;   // next start re-seeds the slew limiter from its own
+                             // first computed duty rather than climbing from zero
     Ipre_prev = 0;
     Ve_prev = 0;
     Ipre_max = 1;
@@ -1017,19 +1099,30 @@ void protect(void)
     if(protectFLAG)
         goto ProtectLED;
 
-    if(fabsf(Iin_real) > 15 || Vbus_real > 230)   // combined so a simultaneous over-current AND over-voltage
+    // Over-voltage needs VBUS_OV_CONFIRM consecutive samples, over-current trips
+    // on the first. The bus reading picks up single-sample spikes - the ADC is
+    // triggered at EPwm1's CTR_ZERO, right in the switching edge - and those are
+    // not real bus voltage: one trip recorded 272.7 V one cycle after a healthy
+    // 144.3 V, which would need 25.7 A into the 10 uF bus while the measured
+    // current was 0.62 A. Genuine over-voltage climbs over many cycles (183 ->
+    // 212 -> 260 V was measured), so confirming costs 50 us and still catches it.
+    // The current channel shows no such spikes, so it stays single-sample.
+    if(Vbus_real > VBUS_TRIP_V) vbus_ov_count++;
+    else                        vbus_ov_count = 0;
+
+    if(fabsf(Iin_real) > 12 || vbus_ov_count >= VBUS_OV_CONFIRM)   // combined so a simultaneous over-current AND over-voltage
                                                    // both get recorded below, instead of the first one checked
                                                    // (via else-if) silently hiding the other
     {
         turnoff();
         protectFLAG = 1;
 
-        if(fabsf(Iin_real) > 15)
+        if(fabsf(Iin_real) > 12)
         {
             Iin_protect_value = Iin_real;
             Iin_protectFLAG = 1;
         }
-        if(Vbus_real > 230)
+        if(vbus_ov_count >= VBUS_OV_CONFIRM)
         {
             Vbus_protect_value = Vbus_real;
             Vbus_protectFLAG = 1;
