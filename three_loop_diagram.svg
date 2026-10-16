@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 540" width="920" height="540">
+  <defs>
+    <marker id="aInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1b1d20"/>
+    </marker>
+    <marker id="aBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a5fb4"/>
+    </marker>
+    <marker id="aRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b5302a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="540" fill="#ffffff"/>
+
+  <!-- ================= POWER TRAIN ================= -->
+  <g fill="none" stroke="#1b1d20" stroke-width="1.8" stroke-linecap="round">
+    <circle cx="68" cy="110" r="24"/>
+    <path d="M56,110 q6,-9 12,0 t12,0"/>
+    <path d="M68,134 L68,166"/>
+    <path d="M54,166 L82,166 M59,171 L77,171 M64,176 L72,176"/>
+
+    <path d="M92,110 L150,110"/>
+    <rect x="150" y="70" width="130" height="80" rx="9" fill="#ffffff"/>
+    <path d="M280,110 L370,110"/>
+
+    <path d="M318,110 L318,150"/>
+    <path d="M303,150 L333,150 M303,158 L333,158"/>
+    <path d="M318,158 L318,172"/>
+    <path d="M304,172 L332,172 M309,177 L327,177 M314,182 L322,182"/>
+
+    <rect x="370" y="70" width="130" height="80" rx="9" fill="#ffffff"/>
+    <path d="M500,110 L700,110"/>
+
+    <path d="M548,110 L548,150"/>
+    <path d="M533,150 L563,150 M533,158 L563,158"/>
+    <path d="M548,158 L548,172"/>
+    <path d="M534,172 L562,172 M539,177 L557,177 M544,182 L552,182"/>
+
+    <path d="M640,110 L640,148"/>
+    <circle cx="640" cy="166" r="18" fill="#ffffff"/>
+    <path d="M633,159 L647,159 M640,152 L640,166" stroke-width="1.6"/>
+    <path d="M633,176 L647,176" stroke-width="1.6"/>
+    <path d="M640,184 L640,204"/>
+    <path d="M626,204 L654,204 M631,209 L649,209 M636,214 L644,214"/>
+  </g>
+  <g fill="#1b1d20" stroke="none">
+    <circle cx="120" cy="110" r="3.6"/>
+    <circle cx="318" cy="110" r="3.6"/>
+    <circle cx="345" cy="110" r="3.6"/>
+    <circle cx="548" cy="110" r="3.6"/>
+    <circle cx="640" cy="110" r="3.6"/>
+    <circle cx="700" cy="110" r="3.6"/>
+  </g>
+
+  <g font-family="Segoe UI, Arial, sans-serif" fill="#1b1d20" text-anchor="middle">
+    <text x="215" y="106" font-size="15" font-weight="600">totem-pole</text>
+    <text x="215" y="125" font-size="12" fill="#6a6e76">PFC</text>
+    <text x="435" y="116" font-size="15" font-weight="600">Buck</text>
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="12.5" font-style="italic" fill="#6a6e76">
+    <text x="296" y="140" text-anchor="end">C</text>
+    <text x="300" y="143" font-size="9" text-anchor="end">bus</text>
+    <text x="526" y="140" text-anchor="end">C</text>
+    <text x="530" y="143" font-size="9" text-anchor="end">o</text>
+    <text x="666" y="163" font-size="12.5" font-style="normal">100 V</text>
+    <text x="666" y="177" font-size="10" font-style="normal">source</text>
+    <text x="712" y="106">v</text>
+    <text x="719" y="109" font-size="9">o</text>
+  </g>
+
+  <!-- ================= CURRENT LOOP ================= -->
+  <g fill="none" stroke="#1a5fb4" stroke-width="2" stroke-linecap="round">
+    <path d="M120,110 L120,330 L197,330" marker-end="url(#aBlue)"/>
+    <circle cx="215" cy="330" r="16" fill="#ffffff"/>
+    <path d="M204.7,318.7 L225.3,341.3 M225.3,318.7 L204.7,341.3" stroke-width="1.4"/>
+    <path d="M215,314 L215,288" marker-end="url(#aBlue)"/>
+    <rect x="172" y="236" width="86" height="48" rx="5" fill="#ffffff"/>
+    <path d="M215,236 L215,154" marker-end="url(#aBlue)"/>
+    <path d="M215,468 L215,350" marker-end="url(#aBlue)"/>
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif" fill="#1a5fb4">
+    <text x="215" y="266" font-size="16" font-style="italic" text-anchor="middle">G</text>
+    <text x="226" y="270" font-size="11" font-style="italic" text-anchor="middle">ci</text>
+    <text x="229" y="200" font-size="14" font-style="italic">d</text>
+    <text x="134" y="322" font-size="13" font-style="italic">i</text>
+    <text x="140" y="325" font-size="9.5" font-style="italic">ac</text>
+    <text x="226" y="446" font-size="13" font-style="italic">i</text>
+    <text x="232" y="449" font-size="9.5" font-style="italic">ac,ref</text>
+    <text x="195" y="314" font-size="13">&#8722;</text>
+    <text x="230" y="359" font-size="13">+</text>
+  </g>
+  <g font-family="Consolas, Courier New, monospace" fill="#1a5fb4">
+    <text x="28" y="286" font-size="11.5" letter-spacing="1">BW</text>
+    <text x="28" y="304" font-size="14" font-weight="500">600 ~ 1k Hz</text>
+  </g>
+  <path d="M100,298 L166,276" fill="none" stroke="#1a5fb4" stroke-width="1" stroke-dasharray="3 3"/>
+
+  <!-- ================= BUS-VOLTAGE LOOP ================= -->
+  <g fill="none" stroke="#b5302a" stroke-width="2" stroke-linecap="round">
+    <path d="M345,110 L345,382" marker-end="url(#aRed)"/>
+    <circle cx="345" cy="400" r="16" fill="#ffffff"/>
+    <path d="M334.7,388.7 L355.3,411.3 M355.3,388.7 L334.7,411.3" stroke-width="1.4"/>
+    <path d="M250,400 L325,400" marker-end="url(#aRed)"/>
+    <path d="M361,400 L396,400" marker-end="url(#aRed)"/>
+    <rect x="398" y="376" width="96" height="48" rx="5" fill="#ffffff"/>
+    <path d="M446,376 L446,154" marker-end="url(#aRed)"/>
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif" fill="#b5302a">
+    <text x="446" y="406" font-size="16" font-style="italic" text-anchor="middle">G</text>
+    <text x="458" y="410" font-size="11" font-style="italic" text-anchor="middle">cv</text>
+    <text x="246" y="396" font-size="13" font-style="italic" text-anchor="end">v</text>
+    <text x="246" y="411" font-size="9.5" font-style="italic" text-anchor="end">bus,ref</text>
+    <text x="356" y="372" font-size="13" font-style="italic">v</text>
+    <text x="363" y="375" font-size="9.5" font-style="italic">bus</text>
+    <text x="327" y="383" font-size="13">&#8722;</text>
+    <text x="329" y="425" font-size="13">+</text>
+  </g>
+  <g font-family="Consolas, Courier New, monospace" fill="#b5302a">
+    <text x="506" y="405" font-size="14" font-weight="500">~1k Hz</text>
+  </g>
+
+  <!-- ================= OUTPUT-VOLTAGE LOOP ================= -->
+  <g fill="none" stroke="#b5302a" stroke-width="2" stroke-linecap="round">
+    <path d="M700,110 L700,452" marker-end="url(#aRed)"/>
+    <circle cx="700" cy="470" r="16" fill="#ffffff"/>
+    <path d="M689.7,458.7 L710.3,481.3 M710.3,458.7 L689.7,481.3" stroke-width="1.4"/>
+    <path d="M792,470 L718,470" marker-end="url(#aRed)"/>
+    <path d="M684,470 L662,470" marker-end="url(#aRed)"/>
+    <rect x="560" y="446" width="100" height="48" rx="5" fill="#ffffff"/>
+    <path d="M560,470 L215,470"/>
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif" fill="#b5302a">
+    <text x="610" y="476" font-size="16" font-style="italic" text-anchor="middle">G</text>
+    <text x="622" y="480" font-size="11" font-style="italic" text-anchor="middle">cv</text>
+    <text x="798" y="474" font-size="13" font-style="italic">v</text>
+    <text x="805" y="477" font-size="9.5" font-style="italic">o,ref</text>
+    <text x="711" y="442" font-size="13" font-style="italic">v</text>
+    <text x="718" y="445" font-size="9.5" font-style="italic">o</text>
+    <text x="682" y="453" font-size="13">&#8722;</text>
+    <text x="717" y="497" font-size="13">+</text>
+  </g>
+</svg>
