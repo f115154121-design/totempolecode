@@ -262,6 +262,28 @@ float Vref_start = 0;
 #define CURRENT_LOOP_VBUS_MIN 10.0f
 #define CURRENT_LOOP_KP_MIN   0.001f
 
+//----- current-loop integral term (discrete PI, 2026-10-19) ------------------
+// Kp + Ki/s = Ki(s/wz + 1)/s with wz = Ki/Kp. Discretised s -> (z-1)/Ts:
+//   u[n] = u[n-1] + Kp(e[n]-e[n-1]) + Ki*Ts*e[n]
+// Ki has to scale with 1/Vbus exactly like Kp, otherwise the zero walks around
+// as the bus follows the envelope. Since Ki = wz*Kp, just scale Kp:
+//   Iki_Ts = Ikp * wz * dt      (= 0.7917/Vbus at K=7, FZ=360, dt=50us)
+//
+// MATLAB (docs/control_analysis/matlab/pfc_buck_loops.m):
+//   fc 711 -> 783 Hz,  PM 70.8 -> 44.2 deg,  GM 12.7 dB
+//   60Hz tracking error 8.42% -> 1.41%,  60Hz phase error -4.83 -> -0.11 deg
+// The zero costs 26.6 deg of phase margin - that is what dropping K from 9.3 to
+// 7.0 paid for, so do NOT put K back up. README section 8 has the derivation;
+// section 2's K_max = 8.5 was derived for pure P and does not apply unchanged.
+//
+// Set FZ to 0 to fall back to pure P (the behaviour before 2026-10-19).
+#define CURRENT_LOOP_FZ       360.0f
+#define CURRENT_LOOP_WZ       (2.0f * 3.14159265f * CURRENT_LOOP_FZ)
+// Backstop clamp on the integrator state, in duty units. Normal operation only
+// needs the integrator to trim what the feedforward gets wrong, which is small;
+// 0.3 is far above that but still bounds a runaway from a bad sensor reading.
+#define CURRENT_LOOP_ISUM_LIM 0.3f
+
 //----- slow-leg (EPwm2) commutation dead window -----------------------
 // Both slow-leg arms are held off while |b1| is under this threshold. The window has to
 // outlast several ISR cycles or the 20kHz sampling steps straight over it and the leg
@@ -282,7 +304,7 @@ float a = 0, b = 0, b1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0
       prevoutput = 0, prevoutput1 = 0, z = 0.001568, error = 0,
       integral = 0, integral1 = 0, w = 0, Ifb = 0, Iref = 0,
       Ie = 0, duty = 0, Vac_in = 0, Iin_real = 0, feedforward = 0, Ikp = 0,
-      Vbus_real = 0, Vout_real = 0, Ipi = 0,
+      Vbus_real = 0, Vout_real = 0, Ipi = 0, Ii_sum = 0, Iki_Ts = 0,
       Vo_filt = 0, Vo_prev = 0, Ve = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, Ic = 0, triggered = 0,
       cos_value = 0, sin_value = 0, Vbus_duty = 0, Ipre_max = 1,
       Vref = 140,Vin_real = 0;
@@ -692,14 +714,7 @@ __interrupt void adc_isr(void)
                 EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;    // both slow-leg arms off through the zero crossing
                 EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
             }
-            // CMPA sets this leg's HIGH-side on-fraction (POLSEL=DB_ACTV_HIC, same as
-            // EPwm3). The boost stores energy through the LOW side, so the boost duty
-            // the control law computes has to be written as its complement - writing
-            // final_duty directly made the plant behave as 1-d, which inverts the
-            // current loop: an over-current lowered duty, which then raised the
-            // inductor volt-seconds instead of lowering them, and the current ran away.
-            // Verified against a captured startup: V_L = Vac_in - d*Vbus fits the
-            // measured di/dt to 3.6V RMS, the un-complemented form misses by 100V.
+
             else if(b1 > 0)
             {
                 EPwm1Regs.CMPA.half.CMPA = (1 - final_duty) * 2250;
@@ -731,14 +746,7 @@ __interrupt void adc_isr(void)
         Hold();
     }
 
-    // Only refresh while actually switching, so the snapshot survives the stop:
-    // the bench cannot read this live (JTAG is unplugged while the stage is
-    // energised), so after power-down dbg must still hold the last RUNNING
-    // cycle rather than an idle one. Frozen on a trip for the same reason.
-    // Measurements refresh only while actually switching, so the snapshot
-    // survives the stop: the bench cannot read this live (JTAG is unplugged
-    // while the stage is energised), so after power-down dbg must still hold
-    // the last RUNNING cycle rather than an idle one. Frozen on a trip too.
+
     if(system_running && !protectFLAG)
     {
         if(fabsf(Iin_real) > dbg.Iin_peak) dbg.Iin_peak  = fabsf(Iin_real);
@@ -758,8 +766,7 @@ __interrupt void adc_isr(void)
         dbg.Ikp       = Ikp;
     }
 
-    // Flags stay live - they are how you tell WHY it stopped, so they must not
-    // be frozen along with the measurements above.
+
     dbg.PLL_flag  = PLL_flag;   dbg.system_running = system_running;
     dbg.starset_up = starset_up; dbg.buck_started  = buck_started;
     dbg.protectFLAG = protectFLAG;
@@ -774,19 +781,7 @@ __interrupt void adc_isr(void)
 }
 
 
-//==================================================================
-// ZeroCrossDetect - fires once per line cycle, at the start of the POSITIVE
-// half cycle only. It used to fire on both crossings, so a start could land
-// on either half and the current sometimes began from the negative one.
-//
-// Keyed off b1's own sign rather than a PLL phase threshold, so the event
-// coincides exactly with the b1 > 0 branch the slow leg commutates into -
-// no assumption about which phase threshold maps to which half cycle.
-// Arming below -SLOW_LEG_DEAD_V and firing above +SLOW_LEG_DEAD_V gives
-// hysteresis, so noise around the crossing cannot emit several events.
-// Firing at +3V rather than exactly 0 costs nothing: PWM is held off
-// inside |b1| < 5 anyway.
-//==================================================================
+
 void ZeroCrossDetect(void)
 {
     if(b1 < -SLOW_LEG_DEAD_V)
@@ -802,13 +797,7 @@ void ZeroCrossDetect(void)
     }
 }
 
-//==================================================================
-// CheckPLLLock - counter-based lock confirmation (mirrors the reference
-// CheckPLLLock() pattern, adapted to this file's own d1/q1/integral1).
-// Thresholds are carried over as a starting point from that reference
-// (same 0.231343 ADC scaling, so amplitudes should be in a similar range)
-// - watch q1/d1 on the bench and retune if they don't match your hardware.
-//==================================================================
+
 void CheckPLLLock(void)
 {
     if(fabsf(d1) > 1 || integral1 < -0.2 || integral1 > 6.5)
@@ -844,13 +833,10 @@ void CheckPLLLock(void)
 
 void currentloop(void)
 {
-    Ic = Ipre * cos_value;   // moved above its use below - was computed after Iref=Ic, so Iref was
-                              // reading last cycle's stale Ic instead of this cycle's fresh value
+    Ic = Ipre * cos_value;
 
-    float vbus_for_ikp = Vbus_real;   // measured bus, not Vref - this divisor exists to
-                                       // cancel the plant's own Vbus gain, so it has to be
-                                       // the real one (unlike the feedforward, where Vref
-                                       // is what shapes the bus)
+    float vbus_for_ikp = Vbus_real;
+
     if(vbus_for_ikp < CURRENT_LOOP_VBUS_MIN) vbus_for_ikp = CURRENT_LOOP_VBUS_MIN;
     Ikp = CURRENT_LOOP_K / vbus_for_ikp;
     if(Ikp < CURRENT_LOOP_KP_MIN) Ikp = CURRENT_LOOP_KP_MIN;
@@ -870,77 +856,67 @@ void currentloop(void)
 
     feedforward = 1 - (Vac_in / Vref);
     Ie = Iref - Ifb;
-    Ipi = Ikp * Ie;
-    duty = feedforward + Ipi;
 
-    // Startup duty soft-start: ride the total duty up with Ipre_max (1->8, the same
-    // ~0.7s current-amplitude ramp) instead of letting switching begin at the near-1
-    // feedforward duty near the zero crossing - which the low-gain P current loop
-    // can't pull back before the inductor current overshoots. Cap reaches 1.0 once
-    // Ipre_max hits 8, so it stops limiting after soft-start and the 0.97 clamp rules.
+    // Integral term. Held hard at zero until the Ipre_max soft start has finished,
+    // so the whole start-up sequence runs as the pure-P version that is known to
+    // come up at 7.4 A peak. Engaging afterwards is bumpless: the state starts at
+    // zero and only grows to cancel the error P leaves behind, by which time the
+    // converter is already in steady state.
+    if(CURRENT_LOOP_FZ > 0.0f && Ipre_max >= 8.0f)
+    {
+        Iki_Ts = Ikp * (CURRENT_LOOP_WZ * dt);   // Ki = wz*Kp, so reuse Ikp's divide
+        Ii_sum += Iki_Ts * Ie;
+    }
+    else
+    {
+        Iki_Ts = 0;
+        Ii_sum = 0;
+    }
+    if(Ii_sum >  CURRENT_LOOP_ISUM_LIM) Ii_sum =  CURRENT_LOOP_ISUM_LIM;
+    if(Ii_sum < -CURRENT_LOOP_ISUM_LIM) Ii_sum = -CURRENT_LOOP_ISUM_LIM;
+
+    Ipi = Ikp * Ie + Ii_sum;
+
+    float duty_unsat = feedforward + Ipi;   // kept for the anti-windup back-calculation
+    duty = duty_unsat;
+
     float duty_cap = DUTY_CAP_START + (1.0f - DUTY_CAP_START) * ((Ipre_max - 1.0f) / 7.0f);
     if(duty > duty_cap) duty = duty_cap;
 
     if(duty >= 0.98) duty = 0.98;
-    if(duty <= 0.05) duty = 0.05;   // EPwm1's 50-count dead band swallows anything
-                                    // under 50/2250 = 2.2%, so below that the low-side
-                                    // arm never fires at all - keep clear of that edge
-
-    // Bumpless transfer for the slew limiter, same idea as UpdateVref()'s
-    // Vref_start, and the Vout_ref_start latch that used to sit in its own ramp.
-    // Hold() used to leave
-    // duty_prev_cmd at 0, so the first activated cycle started a whole half
-    // cycle below the feedforward and the limiter spent ~37 cycles (1.85 ms)
-    // climbing to meet it. Over that climb the inductor sees
-    // |vac| - (1-duty)*Vbus with duty far too small, i.e. about -120 V, and the
-    // current is driven hard negative - the slew limit becomes the fault rather
-    // than the protection. Starting from this cycle's own value means there is
-    // nothing to catch up, and the limiter does only what it is for: bounding
-    // the rate of change from here on.
+    if(duty <= 0.05) duty = 0.05;
     if(duty_seed_pending)
     {
         duty_prev_cmd = duty;
         duty_seed_pending = 0;
     }
 
-    // Slew-rate limit (see DUTY_SLEW_START/RUN above) - clamp this cycle's step
-    // relative to what was actually commanded last cycle. Tight while the
-    // soft-start ramp is still running, then opened up so the duty can keep
-    // pace with the feedforward through the zero crossing.
+
     float duty_slew = (Ipre_max < 8.0f) ? DUTY_SLEW_START : DUTY_SLEW_RUN;
     if(duty > duty_prev_cmd + duty_slew) duty = duty_prev_cmd + duty_slew;
     if(duty < duty_prev_cmd - duty_slew) duty = duty_prev_cmd - duty_slew;
     duty_prev_cmd = duty;
+
+    // Back-calculation anti-windup. Applied AFTER duty_cap, the hard clamps and
+    // the slew limiter, because the integrator has to account for what was really
+    // commanded, not what was computed. This matters most near the zero crossing:
+    // there feedforward is already 1 - 0/140 = 1.0 and duty sits on its ceiling
+    // every cycle, so without this the state would wind up twice per line cycle
+    // and dump the excess into the next quarter cycle as a current overshoot.
+    // When nothing saturates the correction is exactly zero.
+    Ii_sum += (duty - duty_unsat);
+    if(Ii_sum >  CURRENT_LOOP_ISUM_LIM) Ii_sum =  CURRENT_LOOP_ISUM_LIM;
+    if(Ii_sum < -CURRENT_LOOP_ISUM_LIM) Ii_sum = -CURRENT_LOOP_ISUM_LIM;
 }
 
-//==================================================================
-// UpdateVref - the bus reference the feedforward shapes Vbus onto. Because
-// currentloop() commands d = 1 - Vac_in/Vref, the boost settles at
-// Vbus = Vac_in/(1-d) = Vref, so this IS the bus-shaping mechanism: Vbus
-// follows whatever envelope Vref describes. Keep the feedforward on Vref -
-// swapping in the measured bus makes d = 1 - Vac/Vbus an identity with no
-// restoring force, and the bus stops tracking anything.
-//
-// The gap between Vref and the still-charging bus is what the feedforward
-// turns into inrush current: pure-P can only correct it by (d_error/Ikp),
-// so at Ikp=0.06 even a 0.25 duty mismatch is ~4A of current error that no
-// realistic gain can claw back. Rather than fight it, start Vref AT the
-// measured bus and interpolate up to the full envelope - the feedforward is
-// then correct from the first switching cycle, which is the same thing the
-// reference design buys with its pre-charge stage before switching begins.
-//==================================================================
+
 void UpdateVref(void)
 {
-    // 0 -> 1 over the existing Ipre_max soft-start (1->8, ~0.7s), so the bus
-    // target and the current-amplitude limit open up together
+
     float ramp = (Ipre_max - 1.0f) / 7.0f;
     if(ramp < 0.0f) ramp = 0.0f;
     if(ramp > 1.0f) ramp = 1.0f;
 
-    // Re-latch the present bus until the ramp actually starts moving, so the
-    // departure point is wherever the bus sits at that moment. Frozen from
-    // then on: Vref must not keep chasing Vbus_real, or a sagging bus would
-    // drag its own target down after it.
     if(ramp <= 0.0f)
     {
         Vref_start = Vbus_real;
@@ -958,34 +934,11 @@ void UpdateVref(void)
 
     Vref = Vref_start + (vref_full - Vref_start) * ramp;
 
-    // A boost cannot hold its bus below the instantaneous line - once
-    // |vac| > Vbus the body diodes conduct and the line pushes the bus up
-    // regardless of duty. So any Vref under vref_full (= |b1|+40) is an
-    // unreachable target, and aiming at one just saturates both loops.
-    //
-    // That is what the ramp was doing: Vref_start latches the bus at the
-    // first activated cycle, but the Buck preload has already dragged it
-    // below the line peak (measured 140 V against a 153 V peak), and
-    // Ipre_max only reaches 1.17 in the first 16.65 ms, so ramp is 0.024 and
-    // Vref stays pinned near 140 V for the whole 0.7 s soft-start. Measured
-    // consequence: Ipre at its floor of 1, duty at its floor of 0.05, and the
-    // bus still climbing 140 -> 212 V because nothing could stop it.
     if(Vref < vref_full) Vref = vref_full;
 
     if(Vref < VREF_MIN) Vref = VREF_MIN;
 }
 
-//==================================================================
-// Busloop - GPIO10 (buck_switch_state) arms Buck at a fixed preload duty;
-// GPIO11 (switch_state) on top of that hands over to Vout_soft/Vref, with
-// Vout_soft ramping slowly up to VOUT_SOFT_FINAL. Neither switch on (or PLL
-// not locked) holds Buck fully off.
-//
-// Vout_soft is seeded at the handover instant so Vout_soft/Vref lands exactly
-// on the preload duty, then walks up from there - the Buck never sees a duty
-// step, it just opens up over ~5s. Vref moving with the line envelope is
-// fine and expected: the Buck's duty should track its own input voltage.
-//==================================================================
 void Busloop(void)
 {
     if(PLL_flag && buck_switch_state)
@@ -1027,18 +980,6 @@ void Busloop(void)
         Vout_soft = 0;
     }
 
-    // The PFC outer loop aims at whatever the Buck is currently commanded to
-    // deliver, so Ve = Vout_soft - Vo_filt reads as "is the bus actually
-    // supplying what this stage was told to pass".
-    //
-    // These used to be two independent ramps towards the same 100 V -
-    // buck_ramp_count here and Vout_soft's own per-cycle step - and nothing
-    // kept them in step. Measured once they had: Vout_soft at 100 V with
-    // Vout_ref still at 30 V, so Ve sat at -70 V and pinned Ipre on its floor
-    // for an entire run (Ipre_seen never left 1.0). Sharing one value removes
-    // the drift by construction instead of matching two sets of ramp constants.
-    // Assigned after Vout_soft is updated, so VoltageLoop() - which runs later
-    // in the ISR - reads this cycle's value.
     Vout_ref = Vout_soft;
 }
 
@@ -1069,11 +1010,7 @@ void turnoff(void)
     SetSafeOutputs();
 }
 
-// Hold - normal idle / not-yet-running reset for the PFC side only. NOT a fault: resets
-// every PFC control-loop integrator/state so a later start begins clean. Deliberately does
-// NOT touch EPwm3/Buck (uses SetSafeOutputsPFC, not the full SetSafeOutputs) - Buck now runs
-// independently of system_running/starset_up and manages its own output via Busloop() every
-// cycle, so forcing it "safe" here would fight that and undo what Busloop() just computed.
+
 void Hold(void)
 {
     SetSafeOutputsPFC();
@@ -1081,6 +1018,8 @@ void Hold(void)
     starset_up = 0;
     starset_up_prev = 0;   // so the next start re-arms dbg capture from sample 0 again
     Ipi = 0;
+    Ii_sum = 0;            // never carry integral state across a stop/start
+    Iki_Ts = 0;
     Ie = 0;
     Iref = 0;
     Ifb = 0;
@@ -1099,20 +1038,10 @@ void protect(void)
     if(protectFLAG)
         goto ProtectLED;
 
-    // Over-voltage needs VBUS_OV_CONFIRM consecutive samples, over-current trips
-    // on the first. The bus reading picks up single-sample spikes - the ADC is
-    // triggered at EPwm1's CTR_ZERO, right in the switching edge - and those are
-    // not real bus voltage: one trip recorded 272.7 V one cycle after a healthy
-    // 144.3 V, which would need 25.7 A into the 10 uF bus while the measured
-    // current was 0.62 A. Genuine over-voltage climbs over many cycles (183 ->
-    // 212 -> 260 V was measured), so confirming costs 50 us and still catches it.
-    // The current channel shows no such spikes, so it stays single-sample.
     if(Vbus_real > VBUS_TRIP_V) vbus_ov_count++;
     else                        vbus_ov_count = 0;
 
-    if(fabsf(Iin_real) > 12 || vbus_ov_count >= VBUS_OV_CONFIRM)   // combined so a simultaneous over-current AND over-voltage
-                                                   // both get recorded below, instead of the first one checked
-                                                   // (via else-if) silently hiding the other
+    if(fabsf(Iin_real) > 12 || vbus_ov_count >= VBUS_OV_CONFIRM)
     {
         turnoff();
         protectFLAG = 1;
@@ -1201,11 +1130,6 @@ void VoltageLoop(void)
         {
             Ve = Vout_ref - Vo_filt;
             Ipre = Ipre_prev + Vkp * (Ve - Ve_prev) + Vki * 0.01667 * Ve;
-
-            // Anti-windup: clamp BEFORE storing the state. Ipre_prev used to
-            // take the raw value, so while the output sat on a limit the
-            // velocity-form integrator kept accumulating past it - and had to
-            // unwind all the way back before Ipre would leave the limit again.
             if(Ipre > Ipre_max) Ipre = Ipre_max;
             if(Ipre < 1)        Ipre = 1;
 
