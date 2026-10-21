@@ -102,6 +102,10 @@ struct dbg_snapshot {
     float b1, Iin_real;          // line reconstruction and input current
     float duty, Vbus_duty;       // PFC and Buck duty
     float Ikp;                   // current-loop gain this cycle (K/Vbus)
+    float Ii_sum;                // current-loop integrator state, in duty units. Zero until
+                                 // the soft start hands over (Ipre_max >= 8); after that it
+                                 // should settle to a small trim. Sitting on
+                                 // +-CURRENT_LOOP_ISUM_LIM means it has saturated.
     int   PLL_flag, system_running, starset_up, buck_started;
     int   protectFLAG, Iin_protectFLAG, Vbus_protectFLAG;
     int   switch_state, buck_switch_state, shutdown_latch;
@@ -113,6 +117,9 @@ struct dbg_snapshot {
     float Vbus_max, Vbus_min;    // bus excursion
     float duty_max, duty_min;
     float Ipre_seen;             // highest Ipre the outer loop ever asked for
+    float Ii_sum_absmax;         // max |Ii_sum|. If this reaches CURRENT_LOOP_ISUM_LIM the
+                                 // integrator hit its clamp somewhere in the run, which the
+                                 // live value above may well have left by the time you look.
 };
 struct dbg_snapshot dbg;
 
@@ -175,6 +182,7 @@ float dbg_Iin_real[DBG_LEN];
 float dbg_Ipre[DBG_LEN];
 float dbg_Vin_real[DBG_LEN];
 float dbg_Vbus_real[DBG_LEN];
+float dbg_Ii_sum[DBG_LEN];
 int   dbg_index = 0;
 int   dbg_armed = 0;
 int   dbg_done = 0;
@@ -723,6 +731,7 @@ __interrupt void adc_isr(void)
                     dbg_Ipre[dbg_index]       = Ipre;
                     dbg_Vin_real[dbg_index]   = Vin_real;
                     dbg_Vbus_real[dbg_index]  = Vbus_real;
+                    dbg_Ii_sum[dbg_index]     = Ii_sum;
                     dbg_index++;
                     if(dbg_index >= DBG_LEN)
                     {
@@ -783,6 +792,7 @@ __interrupt void adc_isr(void)
         if(duty > dbg.duty_max)            dbg.duty_max  = duty;
         if(duty < dbg.duty_min)            dbg.duty_min  = duty;
         if(Ipre > dbg.Ipre_seen)           dbg.Ipre_seen = Ipre;
+        if(fabsf(Ii_sum) > dbg.Ii_sum_absmax) dbg.Ii_sum_absmax = fabsf(Ii_sum);
 
         dbg.Ipre      = Ipre;       dbg.Ipre_max  = Ipre_max;
         dbg.Vref      = Vref;       dbg.Vbus_real = Vbus_real;
@@ -791,7 +801,7 @@ __interrupt void adc_isr(void)
         dbg.Vo_filt   = Vo_filt;
         dbg.b1        = b1;         dbg.Iin_real  = Iin_real;
         dbg.duty      = duty;       dbg.Vbus_duty = Vbus_duty;
-        dbg.Ikp       = Ikp;
+        dbg.Ikp       = Ikp;        dbg.Ii_sum    = Ii_sum;
     }
 
 
