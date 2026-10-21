@@ -575,10 +575,10 @@ __interrupt void adc_isr(void)
 {
 
     Vin  = AdcResult.ADCRESULT0 - 1558;
-    Iin  = AdcResult.ADCRESULT1 - 2049;
+    Iin  = AdcResult.ADCRESULT1 - 2037;
     Iout = AdcResult.ADCRESULT2 - 2020;
-    Vout = AdcResult.ADCRESULT3 - 2037;
-    Vbus = AdcResult.ADCRESULT4 - 2034;
+    Vout = AdcResult.ADCRESULT3 - 2032;
+    Vbus = AdcResult.ADCRESULT4 - 2029;
 
     Iin_real  = Iin  * 0.0222222;
     Vbus_real = Vbus * 0.48604;
