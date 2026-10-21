@@ -135,14 +135,37 @@ float Iin_protect_value = 0, Vbus_protect_value = 0;   // snapshot at trip time,
 // ZeroCrossDetect(). Everything that starts or stops a stage syncs to it.
 int   zc_armed = 0, zero_cross_event = 0;
 
-//----- startup capture buffer (debug) ------------------------------
-// Arms itself the instant starset_up first goes 0->1 (i.e. the very first
-// activated switching cycle after system_running turns on), then logs one
-// sample per ADC-ISR cycle (every 50us) until DBG_LEN samples are taken or
-// protect() trips (whichever comes first - the inner block stops running
-// once protectFLAG latches, which freezes the buffer automatically).
-// Read out with CCS (View -> Expressions, or Tools -> Graph on the arrays)
-// after halting the target; dbg_index shows how many samples were filled.
+//----- capture buffer (debug) --------------------------------------
+// Arms itself the instant starset_up first goes 0->1 (the first activated
+// switching cycle after system_running turns on), then logs one sample per
+// ADC-ISR cycle (every 50us). DBG_LEN * 50us = 16.65ms, almost exactly one
+// 60Hz line cycle. protect() tripping freezes the buffer automatically, since
+// the inner block stops running once protectFLAG latches.
+//
+// Two modes, picked by dbg_rolling:
+//
+//   dbg_rolling = 1 (default) - ROLLING. Keeps overwriting, so halting the
+//     target at any moment leaves the LAST line cycle in the buffer. This is
+//     what you want for steady-state work (half-cycle asymmetry, THD, phase).
+//     The data wraps: dbg_index is the write head, so the OLDEST sample sits
+//     at dbg_index and the newest at dbg_index-1. Unwrap before plotting.
+//
+//   dbg_rolling = 0 - ONE-SHOT. Stops after DBG_LEN samples, so the buffer
+//     holds the FIRST line cycle after the start. This is the start-up
+//     transient (inrush, duty ramp, Vref ramp) and does not wrap.
+//
+// Either mode can be re-armed by hand without restarting: halt, set
+// dbg_index = 0 / dbg_done = 0 / dbg_armed = 1 in the Expressions view, then
+// resume. starset_up_prev is already 1 by then, so the auto-arm above will
+// not overwrite it.
+//
+// Read out with CCS (View -> Expressions, or Tools -> Graph on the arrays).
+//
+// Useful trick: a real ac current averages to zero over a whole line cycle,
+// so mean(dbg_Iin_real) over the full buffer IS the current sensor's dc
+// offset - the error term that makes the two half cycles unequal, since
+// currentloop() rectifies with Ifb = +/-Iin_real. No need to stop and
+// measure at zero current.
 //----------------------------------------------------------------------
 #define DBG_LEN 333
 float dbg_b1[DBG_LEN];
@@ -155,6 +178,7 @@ float dbg_Vbus_real[DBG_LEN];
 int   dbg_index = 0;
 int   dbg_armed = 0;
 int   dbg_done = 0;
+int   dbg_rolling = 1;   // see above: 1 = last line cycle, 0 = first line cycle
 int   starset_up_prev = 0;
 
 //==================================================================
@@ -702,8 +726,12 @@ __interrupt void adc_isr(void)
                     dbg_index++;
                     if(dbg_index >= DBG_LEN)
                     {
-                        dbg_done = 1;
-                        dbg_armed = 0;
+                        dbg_index = 0;          // wrap; dbg_index is the write head
+                        if(!dbg_rolling)        // one-shot mode stops here instead
+                        {
+                            dbg_done = 1;
+                            dbg_armed = 0;
+                        }
                     }
                 }
 
