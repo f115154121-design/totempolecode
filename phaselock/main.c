@@ -132,6 +132,42 @@ struct dbg_snapshot dbg;
 #define VBUS_TRIP_V     300.0f
 #define VBUS_OV_CONFIRM 2       // consecutive samples (see protect())
 
+//----- input over-current trip --------------------------------------
+// Has to clear the peak the outer loop is allowed to command (IPRE_MAX_FINAL)
+// plus the inductor ripple (about 1 A p-p) plus transient headroom, while
+// staying far enough below the switch rating to still be a real protection.
+// C3M0065090 is good for 23 A at 100C, so there is room; the binding limit is
+// the PFC inductor's saturation current, which is NOT yet measured.
+// Step it together with IPRE_MAX_FINAL - see the staging table below.
+#define IIN_TRIP_A      15.0f
+
+//----- outer-loop current ceiling and soft start ---------------------
+// Ipre is the AMPLITUDE of the current reference (Ic = Ipre * cos_value), so
+// IPRE_MAX_FINAL is the peak line current the loop may ask for. Ipre_max ramps
+// from IPRE_MAX_START to IPRE_MAX_FINAL at IPRE_MAX_STEP per 20kHz cycle, and
+// that ramp doubles as the soft-start progress indicator for duty_cap (see
+// currentloop()), the Vref ramp (UpdateVref()) and the current-loop integrator
+// gate - which is why the span must never be hard-coded in those places.
+//
+// Staging table (104 Vrms, PF 0.997). Raise BOTH defines together, one step at
+// a time, checking dbg.Iin_peak and the PFC inductor current waveform at each
+// stage - the toroid's saturation point is the real unknown, and it shows up
+// as the tail of the triangle curling upward before anything else goes wrong.
+//
+//   P_out   eff     P_in    Irms    Ipeak   IPRE_MAX_FINAL   IIN_TRIP_A
+//    518 W  96.1%    539 W   5.20 A  7.35 A      8.0            12.0   (measured)
+//    700 W  95.5%    733 W   7.07 A 10.00 A     10.5            15.0   <- here
+//    850 W  95.0%    895 W   8.63 A 12.20 A     12.8            17.0
+//   1000 W  94.4%   1059 W  10.21 A 14.44 A     15.2            20.0
+//
+// Efficiency is expected to FALL across these stages: losses go as I^2 while
+// output goes as I, so the curve peaks at part load. That is normal.
+#define IPRE_MAX_START  1.0f
+#define IPRE_MAX_FINAL  10.5f
+#define IPRE_MAX_SPAN   (IPRE_MAX_FINAL - IPRE_MAX_START)
+#define IPRE_MAX_STEP   0.0005f   // per 20kHz cycle -> span/step/20k seconds
+#define IPRE_MIN        1.0f      // floor on the commanded amplitude
+
 int protectFLAG = 0;
 int Iin_protectFLAG = 0, Vbus_protectFLAG = 0;
 int vbus_ov_count = 0;
@@ -338,7 +374,7 @@ float a = 0, b = 0, b1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0
       Ie = 0, duty = 0, Vac_in = 0, Iin_real = 0, feedforward = 0, Ikp = 0,
       Vbus_real = 0, Vout_real = 0, Ipi = 0, Ii_sum = 0, Iki_Ts = 0,
       Vo_filt = 0, Vo_prev = 0, Ve = 0, Ipre = 0, Ve_prev = 0.0, Ipre_prev = 0, Ic = 0, triggered = 0,
-      cos_value = 0, sin_value = 0, Vbus_duty = 0, Ipre_max = 1,
+      cos_value = 0, sin_value = 0, Vbus_duty = 0, Ipre_max = IPRE_MAX_START,
       Vref = 140,Vin_real = 0;
 
 //==================================================================
@@ -900,7 +936,7 @@ void currentloop(void)
     // come up at 7.4 A peak. Engaging afterwards is bumpless: the state starts at
     // zero and only grows to cancel the error P leaves behind, by which time the
     // converter is already in steady state.
-    if(CURRENT_LOOP_FZ > 0.0f && Ipre_max >= 8.0f)
+    if(CURRENT_LOOP_FZ > 0.0f && Ipre_max >= IPRE_MAX_FINAL)
     {
         Iki_Ts = Ikp * (CURRENT_LOOP_WZ * dt);   // Ki = wz*Kp, so reuse Ikp's divide
         Ii_sum += Iki_Ts * Ie;
@@ -918,7 +954,7 @@ void currentloop(void)
     float duty_unsat = feedforward + Ipi;   // kept for the anti-windup back-calculation
     duty = duty_unsat;
 
-    float duty_cap = DUTY_CAP_START + (1.0f - DUTY_CAP_START) * ((Ipre_max - 1.0f) / 7.0f);
+    float duty_cap = DUTY_CAP_START + (1.0f - DUTY_CAP_START) * ((Ipre_max - IPRE_MAX_START) / IPRE_MAX_SPAN);
     if(duty > duty_cap) duty = duty_cap;
 
     if(duty >= 0.98) duty = 0.98;
@@ -930,7 +966,7 @@ void currentloop(void)
     }
 
 
-    float duty_slew = (Ipre_max < 8.0f) ? DUTY_SLEW_START : DUTY_SLEW_RUN;
+    float duty_slew = (Ipre_max < IPRE_MAX_FINAL) ? DUTY_SLEW_START : DUTY_SLEW_RUN;
     if(duty > duty_prev_cmd + duty_slew) duty = duty_prev_cmd + duty_slew;
     if(duty < duty_prev_cmd - duty_slew) duty = duty_prev_cmd - duty_slew;
     duty_prev_cmd = duty;
@@ -951,7 +987,7 @@ void currentloop(void)
 void UpdateVref(void)
 {
 
-    float ramp = (Ipre_max - 1.0f) / 7.0f;
+    float ramp = (Ipre_max - IPRE_MAX_START) / IPRE_MAX_SPAN;
     if(ramp < 0.0f) ramp = 0.0f;
     if(ramp > 1.0f) ramp = 1.0f;
 
@@ -1066,7 +1102,7 @@ void Hold(void)
                              // first computed duty rather than climbing from zero
     Ipre_prev = 0;
     Ve_prev = 0;
-    Ipre_max = 1;
+    Ipre_max = IPRE_MAX_START;
     triggered = 0;
 }
 
@@ -1079,12 +1115,12 @@ void protect(void)
     if(Vbus_real > VBUS_TRIP_V) vbus_ov_count++;
     else                        vbus_ov_count = 0;
 
-    if(fabsf(Iin_real) > 12 || vbus_ov_count >= VBUS_OV_CONFIRM)
+    if(fabsf(Iin_real) > IIN_TRIP_A || vbus_ov_count >= VBUS_OV_CONFIRM)
     {
         turnoff();
         protectFLAG = 1;
 
-        if(fabsf(Iin_real) > 12)
+        if(fabsf(Iin_real) > IIN_TRIP_A)
         {
             Iin_protect_value = Iin_real;
             Iin_protectFLAG = 1;
@@ -1169,7 +1205,7 @@ void VoltageLoop(void)
             Ve = Vout_ref - Vo_filt;
             Ipre = Ipre_prev + Vkp * (Ve - Ve_prev) + Vki * 0.01667 * Ve;
             if(Ipre > Ipre_max) Ipre = Ipre_max;
-            if(Ipre < 1)        Ipre = 1;
+            if(Ipre < IPRE_MIN) Ipre = IPRE_MIN;
 
             Ve_prev = Ve;
             Ipre_prev = Ipre;
@@ -1181,16 +1217,16 @@ void VoltageLoop(void)
         triggered = 0;
     }
 
-    if(Ipre_max < 8)
+    if(Ipre_max < IPRE_MAX_FINAL)
     {
-        Ipre_max = Ipre_max + 0.0005;
+        Ipre_max = Ipre_max + IPRE_MAX_STEP;
     }
-    if(Ipre_max > 8)
+    if(Ipre_max > IPRE_MAX_FINAL)
     {
-        Ipre_max = 8;
+        Ipre_max = IPRE_MAX_FINAL;
     }
     if(Ipre > Ipre_max) Ipre = Ipre_max;
-    if(Ipre < 1) Ipre = 1;
+    if(Ipre < IPRE_MIN) Ipre = IPRE_MIN;
 }
 
 void PLL(void)
