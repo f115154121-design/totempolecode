@@ -538,8 +538,8 @@ void InitEPwmTimer()
     EPwm1Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
     EPwm1Regs.DBCTL.bit.POLSEL = DB_ACTV_HIC;
     EPwm1Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
-    EPwm1Regs.DBRED = 50;
-    EPwm1Regs.DBFED = 50;
+    EPwm1Regs.DBRED = 40;
+    EPwm1Regs.DBFED = 40;
     EPwm1Regs.AQCTLA.bit.CAU = AQ_CLEAR;
     EPwm1Regs.AQCTLA.bit.CAD = AQ_SET;     // was AQ_CLEAR - with no SET action anywhere, EPWM1A/B could never go high; combined with
                                             // IN_MODE/POLSEL below this forced both switches on this leg permanently HIGH (shoot-through).
@@ -597,8 +597,8 @@ void InitEPwmTimer()
     EPwm3Regs.DBCTL.bit.IN_MODE = DBA_RED_DBB_FED;
     EPwm3Regs.DBCTL.bit.POLSEL = DB_ACTV_HIC;
     EPwm3Regs.DBCTL.bit.OUT_MODE = DB_FULL_ENABLE;
-    EPwm3Regs.DBRED = 75;
-    EPwm3Regs.DBFED = 75;
+    EPwm3Regs.DBRED = 40;
+    EPwm3Regs.DBFED = 40;
     EPwm3Regs.AQCTLA.bit.CAU = AQ_CLEAR;
     EPwm3Regs.AQCTLA.bit.CAD = AQ_SET;     
     EPwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
@@ -787,7 +787,7 @@ __interrupt void adc_isr(void)
                     }
                 }
 
-            if(b1 < 5 && b1 > -5)
+            if(b1 < 2 && b1 > -2)
             {
                 EPwm1Regs.CMPA.half.CMPA = 0;
                 EPwm1Regs.CMPB = 2250;
