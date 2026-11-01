@@ -209,6 +209,13 @@ int   zc_armed = 0, zero_cross_event = 0;
 // offset - the error term that makes the two half cycles unequal, since
 // currentloop() rectifies with Ifb = +/-Iin_real. No need to stop and
 // measure at zero current.
+//
+// Caveat: that only holds if the buffer spans a WHOLE number of line
+// cycles. DBG_LEN*50us = 16.65ms, which is exactly one cycle at 60.06Hz;
+// at 60.501Hz it is 1.0073 cycles and the leftover fraction biases the
+// mean. Measured 10/22: the raw mean said +1.36 counts while a least
+// squares fit that separates dc from the fundamental said -0.47 -
+// opposite signs. Off 60Hz, fit rather than average.
 //----------------------------------------------------------------------
 #define DBG_LEN 333
 float dbg_b1[DBG_LEN];
@@ -619,7 +626,7 @@ __interrupt void adc_isr(void)
 {
 
     Vin  = AdcResult.ADCRESULT0 - 1558;
-    Iin  = AdcResult.ADCRESULT1 - 2037;
+    Iin  = AdcResult.ADCRESULT1 - 2034;
     Iout = AdcResult.ADCRESULT2 - 2020;
     Vout = AdcResult.ADCRESULT3 - 2032;
     Vbus = AdcResult.ADCRESULT4 - 2029;
