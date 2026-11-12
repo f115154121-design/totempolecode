@@ -238,6 +238,14 @@ int   starset_up_prev = 0;
 #define kp 2.5
 #define ki 0.5
 
+// Vin sense gain [V per ADC count]. Calibrated 2026-11-12 at 115 V input: a DMM
+// read 115.0 Vrms at the PFC input terminals while a least-squares fit of
+// dbg_Vin_real gave a 153.29 V fundamental with the old gain 0.231343, so
+//   VIN_GAIN = 0.231343 * (115 * sqrt(2)) / 153.29 = 0.24544   (+6.1 %)
+// The zero (the 1558 in adc_isr) was checked in the same capture: the fitted
+// dc term was under one count, so only the gain moved.
+#define VIN_GAIN 0.24544f
+
 // PFC outer voltage loop (VoltageLoop, one update per line cycle).
 // Was 0.1 / 0.01, which put the crossover at 0.006 Hz - an integral time
 // constant near 28 s, so a load step left Vo off by ~9 V for tens of seconds
@@ -634,7 +642,7 @@ __interrupt void adc_isr(void)
     Iin_real  = Iin  * 0.0222222;
     Vbus_real = Vbus * 0.48604;
     Vout_real = Vout * 0.123668;
-    Vin_real = Vin * 0.231343;
+    Vin_real = Vin * VIN_GAIN;
 
     lowpass();
     PLL();
@@ -1238,7 +1246,7 @@ void VoltageLoop(void)
 
 void PLL(void)
 {
-    b = Vin * 0.231343;
+    b = Vin * VIN_GAIN;
 
     cos_value = cos(integral1);
     sin_value = sin(integral1);

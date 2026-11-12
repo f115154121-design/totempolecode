@@ -113,7 +113,7 @@ int counter20k = 0;
 
 //======================================================================
 // PLL - verbatim from main.c, with b taken from the PSIM input in volts
-// (the DSP scales raw ADC counts by 0.231343 to get the same units).
+// (the DSP scales raw ADC counts by VIN_GAIN = 0.24544 to get the same units).
 //======================================================================
 static void PLL(void)
 {

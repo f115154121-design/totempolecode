@@ -52,6 +52,10 @@ int state = 0;
 #define kp 2.5
 #define ki 0.5
 
+// Vin sense gain [V per ADC count] - keep equal to VIN_GAIN in main.c
+// (calibrated 2026-11-12 against a DMM at 115 V; was 0.231343).
+#define VIN_GAIN 0.24544f
+
 int   Vin = 0;
 float Vin_real = 0;
 
@@ -257,7 +261,7 @@ void InitEPwmTimer(void)
 __interrupt void adc_isr(void)
 {
     Vin      = AdcResult.ADCRESULT0 - 1558;   // retune 1558 to your bench bias circuit's zero-crossing code
-    Vin_real = Vin * 0.231343f;
+    Vin_real = Vin * VIN_GAIN;
 
     PLL();
     ZeroCrossDetect();
