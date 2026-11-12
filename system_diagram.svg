@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 580" width="1080" height="580"
+     role="img" aria-label="無橋式圖騰柱 PFC 加降壓級系統架構圖，輸入線上標示輸入電流 Iin，輸出電容上標示輸出電壓 Vout">
+
+  <defs>
+    <!-- N 通道功率 MOSFET（含本體二極體）。原點 = 汲極端點，源極在 (0,80)，閘極在 (-52,40) -->
+    <g id="nmos">
+      <path d="M-52 40 H-34"/>
+      <path d="M-34 18 V62"/>
+      <path d="M-26 18 V32"/>
+      <path d="M-26 34 V46"/>
+      <path d="M-26 48 V62"/>
+      <path d="M0 0 V24 H-26"/>
+      <path d="M0 80 V56 H-26"/>
+      <path d="M0 56 V40 H-20"/>
+      <polygon points="-26,40 -15,35 -15,45" fill="#000" stroke="none"/>
+      <path d="M0 24 H18 V33"/>
+      <path d="M9 33 H27"/>
+      <polygon points="9,46 27,46 18,33" fill="#000" stroke="none"/>
+      <path d="M18 46 V56 H0"/>
+    </g>
+  </defs>
+
+  <rect x="4" y="4" width="1072" height="572" fill="#ffffff" stroke="#000000" stroke-width="2"/>
+
+  <g fill="none" stroke="#000000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- ===== 匯流排 ===== -->
+    <path d="M340 72 H700"/>
+    <path d="M340 528 H990"/>
+
+    <!-- ===== 輸入側 ===== -->
+    <circle cx="72" cy="318" r="24"/>
+    <path d="M56 318 q8 -13 16 0 q8 13 16 0"/>
+    <path d="M72 294 V240 H192"/>
+    <path d="M192 240 a8.75 8.75 0 0 1 17.5 0 a8.75 8.75 0 0 1 17.5 0 a8.75 8.75 0 0 1 17.5 0 a8.75 8.75 0 0 1 17.5 0"/>
+    <path d="M262 240 H340"/>
+    <path d="M72 342 V392 H326"/>
+    <path d="M326 392 a14 14 0 0 1 28 0"/>
+    <path d="M354 392 H480"/>
+
+    <!-- ===== 圖騰柱橋臂 ===== -->
+    <path d="M340 72 V120"/>
+    <path d="M340 200 V410"/>
+    <path d="M340 490 V528"/>
+    <path d="M480 72 V120"/>
+    <path d="M480 200 V410"/>
+    <path d="M480 490 V528"/>
+    <use href="#nmos" x="340" y="120"/>
+    <use href="#nmos" x="340" y="410"/>
+    <use href="#nmos" x="480" y="120"/>
+    <use href="#nmos" x="480" y="410"/>
+
+    <!-- ===== 母線電容 C1 ===== -->
+    <path d="M560 72 V290"/>
+    <path d="M530 290 H590"/>
+    <path d="M530 312 H590"/>
+    <path d="M560 312 V528"/>
+
+    <!-- ===== 降壓級橋臂 ===== -->
+    <path d="M700 72 V120"/>
+    <path d="M700 200 V370"/>
+    <path d="M700 450 V528"/>
+    <use href="#nmos" x="700" y="120"/>
+    <use href="#nmos" x="700" y="370"/>
+
+    <!-- ===== 輸出側 ===== -->
+    <path d="M700 256 H760"/>
+    <path d="M760 256 a8.75 8.75 0 0 1 17.5 0 a8.75 8.75 0 0 1 17.5 0 a8.75 8.75 0 0 1 17.5 0 a8.75 8.75 0 0 1 17.5 0"/>
+    <path d="M830 256 H990"/>
+    <path d="M870 256 V340"/>
+    <path d="M845 340 H895"/>
+    <path d="M845 362 H895"/>
+    <path d="M870 362 V528"/>
+    <path d="M990 256 V330"/>
+    <rect x="978" y="330" width="24" height="90"/>
+    <path d="M990 420 V528"/>
+
+    <!-- ===== 新增：輸入電流 Iin ===== -->
+    <path d="M98 212 H160"/>
+  </g>
+
+  <!-- 節點 -->
+  <g fill="#000000">
+    <circle cx="340" cy="240" r="5"/>
+    <circle cx="480" cy="392" r="5"/>
+    <circle cx="480" cy="72"  r="5"/>
+    <circle cx="480" cy="528" r="5"/>
+    <circle cx="560" cy="72"  r="5"/>
+    <circle cx="560" cy="528" r="5"/>
+    <circle cx="700" cy="256" r="5"/>
+    <circle cx="700" cy="528" r="5"/>
+    <circle cx="870" cy="256" r="5"/>
+    <circle cx="870" cy="528" r="5"/>
+  </g>
+
+  <!-- 新增：Iin 箭頭 -->
+  <polygon points="160,205 160,219 176,212" fill="#000000"/>
+
+  <!-- ===== 文字 ===== -->
+  <g font-family="Arial, Helvetica, sans-serif" font-size="21" fill="#000000">
+    <text x="40"  y="326" text-anchor="end">AC</text>
+    <text x="227" y="218" text-anchor="middle">L1</text>
+    <text x="795" y="234" text-anchor="middle">L2</text>
+
+    <text x="278" y="168" text-anchor="end">Q1</text>
+    <text x="278" y="458" text-anchor="end">Q2</text>
+    <text x="418" y="168" text-anchor="end">Q3</text>
+    <text x="418" y="458" text-anchor="end">Q4</text>
+    <text x="638" y="168" text-anchor="end">Q5</text>
+    <text x="638" y="418" text-anchor="end">Q6</text>
+
+    <text x="520" y="309" text-anchor="end">C1</text>
+    <text x="836" y="359" text-anchor="end">C2</text>
+    <text x="1014" y="359">RL</text>
+
+    <text x="604" y="296" text-anchor="middle" font-size="26">+</text>
+    <text x="618" y="316">Vbus</text>
+    <text x="604" y="340" text-anchor="middle" font-size="26">&#8722;</text>
+
+    <!-- 新增：輸出電壓 -->
+    <text x="910" y="346" text-anchor="middle" font-size="26">+</text>
+    <text x="924" y="366" font-size="20">Vout</text>
+    <text x="910" y="390" text-anchor="middle" font-size="26">&#8722;</text>
+
+    <!-- 新增：輸入電流 -->
+    <text x="134" y="198" text-anchor="middle">Iin</text>
+  </g>
+</svg>
