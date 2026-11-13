@@ -677,7 +677,7 @@ __interrupt void adc_isr(void)
 {
     pfc_isr_seq++;   // lets PfcDrive() tell a force requested this ISR from one already on the pins
 
-    Vin  = AdcResult.ADCRESULT0 - 1558;
+    Vin  = AdcResult.ADCRESULT0 - 1548;
     Iin  = AdcResult.ADCRESULT1 - 2034;
     Iout = AdcResult.ADCRESULT2 - 2020;
     Vout = AdcResult.ADCRESULT3 - 2032;
