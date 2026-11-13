@@ -33,6 +33,12 @@ Totem-pole 無橋 PFC + Buck（後接雙邊 LCC 無線充電），TMS320F28069�
   推論：**Buck 要控 Vbus，不是控 Vo**（＝老師三環圖的配置）。若 Buck 緊控 Vo，120 Hz 能量被擋在 bus 側而 10 µF 吃不下，迴路會跟物理打架。推導見 `docs/theory/README.md` §5。
 - PFC 電壓環負責 Vo 的能量平衡；Buck 目前是開迴路前饋（直流變壓器），兩者不能同時積分 Vo。
 - 調參數後可用 `docs/control_analysis/sim/sysim.c` 驗證（見該 README 的「重現」）。
+- **PFC 快臂（EPwm1）的載波極性隨半周切換（2026-11-13）**。Cbus 只有 10 µF，20 kHz 漣波取決於 PFC 灌入與 Buck 抽出的脈波有沒有重疊，載波同步不等於脈波對齊。
+  - Buck 上臂（EPWM3A）以 CTR=0 為中心導通。PFC 灌入 bus 的是導通 `1−d` 的那一臂：固定極性時正半周是 EPWM1A（中心 CTR=0），負半周是 EPWM1B（中心 CTR=PRD），與 Buck 錯開半個週期。
+  - 700 W 輸入峰值實測 bus 漣波：正半周 18 V p-p、負半周 27 V p-p（模型 18.1 / 26.6）。這就是正負半周 Vbus 不對稱的來源，與 PLL、Vin 零點無關。
+  - 修法在 `PfcDrive()`：負半周反轉 EPwm1 的 AQ 極性，兩個半周都用 `CMP = (1−d)·PRD`。**尚未上機驗證。**
+  - AQCTL 沒有影子暫存器，極性只能在軟體強制已經生效（兩臂皆關）之後切換。關斷一律走 `PfcLegOff()`；**不可直接寫 `CMPA=0 / CMPB=2250`**，反極性下那代表兩臂全開。
+  - 即使對齊仍有約 18 V p-p（空載 10 V），來自 Lb = 75 µH 的 34 A 漣波電流。ADC 在 CTR=0 取樣，`Vbus_real` 比真實平均值高約 7 V，兩個半周相同，所以 DSP 看不到這個不對稱。
 
 ## 硬體（2026-10-16 實測）
 

@@ -22,6 +22,8 @@ void debun(void);
 void UpdateVref(void);        // shared boost-bus reference used by both currentloop() and Busloop()
 void SetSafeOutputs(void);    // full safe state (PFC + Buck) - used by turnoff() on a real fault trip
 void SetSafeOutputsPFC(void); // PFC-leg-only safe state - used by Hold(), leaves Buck's own output alone
+void PfcLegOff(void);         // EPWM1 both arms off, valid under either carrier polarity
+void PfcDrive(float duty_cmd); // EPWM1/EPWM2 output mapping for this cycle, incl. the polarity swap
 void turnoff(void);          // hardware trip (protection event)
 void Hold(void);             // normal idle reset (not a fault)
 void protect(void);          // latched fault supervisor
@@ -380,6 +382,44 @@ float Vref_start = 0;
 #define AQ_SW_LOW   1     // force a continuous low on that output
 #define AQ_SW_HIGH  2     // force a continuous high on that output
 
+//----- EPWM1 (PFC fast leg) carrier polarity -------------------------------
+// The 10uF bus only sees the DIFFERENCE between what the PFC pushes in and what
+// the Buck pulls out, 20kHz pulse by 20kHz pulse. The Buck's high side (EPWM3A)
+// conducts centred on CTR=0. The PFC delivers to the bus through whichever arm
+// is on for (1-d): with one fixed polarity that is EPWM1A (centred on CTR=0) in
+// the positive half but EPWM1B (centred on CTR=PRD) in the negative half, i.e.
+// half a carrier period away from the Buck's draw. Measured 2026-11-13 at 700W,
+// line peak: 18V p-p bus ripple in the positive half, 27V p-p in the negative
+// half (model: 18.1 / 26.6).
+//
+// Fix: flip EPWM1's action-qualifier polarity for the negative half, so the
+// (1-d) arm is centred on CTR=0 in BOTH halves. Arm on-times as a fraction of
+// the period, C = CMPA = CMPB:
+//   NORMAL   (CxU=CLEAR, CxD=SET):  A = C/PRD about CTR=0,     B = 1-C/PRD about CTR=PRD
+//   INVERTED (CxU=SET, CxD=CLEAR):  A = 1-C/PRD about CTR=PRD, B = C/PRD about CTR=0
+// so C = (1-d)*PRD gives the right duty in both, and the ADC sample at CTR=0
+// still lands mid-ramp on the inductor current.
+//
+// AQCTL has no shadow register - a write acts at once, while CMPA/CMPB and
+// AQCSFRC load at the next CTR=0. So the polarity is only ever changed while
+// the continuous force already holds both arms off ON THE PINS, meaning the
+// force was requested in an EARLIER ISR (pfc_force_seq != pfc_isr_seq).
+// The plain CMP both-off pair (CMPA=0, CMPB=PRD) is NOT safe on its own any
+// more: under the inverted polarity it means both arms 100% on. Always go
+// through PfcLegOff().
+#define AQ_SW_OFF          0     // no force - the action qualifier drives the output
+#define PFC_AQA_NORMAL     ((AQ_CLEAR << 4) | (AQ_SET   << 6))    // AQCTLA: CAU=CLEAR, CAD=SET
+#define PFC_AQB_NORMAL     ((AQ_CLEAR << 8) | (AQ_SET   << 10))   // AQCTLB: CBU=CLEAR, CBD=SET
+#define PFC_AQA_INVERTED   ((AQ_SET   << 4) | (AQ_CLEAR << 6))    // AQCTLA: CAU=SET,   CAD=CLEAR
+#define PFC_AQB_INVERTED   ((AQ_SET   << 8) | (AQ_CLEAR << 10))   // AQCTLB: CBU=SET,   CBD=CLEAR
+// A forced low; AQ-B forced high, which the ACTV_HIC dead band inverts to EPWM1B low.
+// Written as one word so it never depends on what a read of a shadowed register returns.
+#define PFC_CSF_BOTH_OFF   (AQ_SW_LOW | (AQ_SW_HIGH << 2))
+int           pfc_aq_inv   = 0;   // polarity now in AQCTL: 0 = NORMAL, 1 = INVERTED
+int           pfc_force_on = 0;   // both-off force currently requested
+unsigned long pfc_isr_seq  = 0;   // ISR counter
+unsigned long pfc_force_seq = 0;  // ISR in which the force was first requested
+
 int Vin = 0, Iin = 0, Vbus = 0, Iout = 0, Vout = 0;
 
 float a = 0, b = 0, b1 = 0, sfq = 0, sfd = 0, s5q = 0, s5d = 0, cfq = 0, cfd = 0, c5q = 0, c5d = 0,
@@ -552,7 +592,10 @@ void InitEPwmTimer()
     EPwm1Regs.AQCTLA.bit.CAD = AQ_SET;     // was AQ_CLEAR - with no SET action anywhere, EPWM1A/B could never go high; combined with
                                             // IN_MODE/POLSEL below this forced both switches on this leg permanently HIGH (shoot-through).
     EPwm1Regs.AQCTLB.bit.CBU = AQ_CLEAR;
-    EPwm1Regs.AQCTLB.bit.CBD = AQ_SET;     // kept in sync with AQCTLA; unused while IN_MODE=DBA_RED_DBB_FED (B is derived from A).
+    EPwm1Regs.AQCTLB.bit.CBD = AQ_SET;     // kept in sync with AQCTLA. With IN_MODE=DBA_RED_DBB_FED the falling-edge path, and so
+                                            // EPWM1B, is fed from AQ-B: CMPB and AQCTLB are live and must always track CMPA/AQCTLA.
+    EPwm1Regs.AQSFRC.bit.RLDCSF = 0;        // AQCSFRC loads at CTR=0, the same boundary as the CMP shadows
+    EPwm1Regs.AQCSFRC.all = PFC_CSF_BOTH_OFF;   // forced both-off until PfcDrive() releases it
     EPwm1Regs.CMPA.half.CMPA = 0;          // both arms off before the first ISR - the reset value 0/0 leaves EPWM1B 100% on
     EPwm1Regs.CMPB = 2250;
 
@@ -632,6 +675,7 @@ void InitEPwmTimer()
 
 __interrupt void adc_isr(void)
 {
+    pfc_isr_seq++;   // lets PfcDrive() tell a force requested this ISR from one already on the pins
 
     Vin  = AdcResult.ADCRESULT0 - 1558;
     Iin  = AdcResult.ADCRESULT1 - 2034;
@@ -795,28 +839,7 @@ __interrupt void adc_isr(void)
                     }
                 }
 
-            if(b1 < 2 && b1 > -2)
-            {
-                EPwm1Regs.CMPA.half.CMPA = 0;
-                EPwm1Regs.CMPB = 2250;
-                EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;    // both slow-leg arms off through the zero crossing
-                EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
-            }
-
-            else if(b1 > 0)
-            {
-                EPwm1Regs.CMPA.half.CMPA = (1 - final_duty) * 2250;
-                EPwm1Regs.CMPB = (1 - final_duty) * 2250;
-                EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;
-                EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_HIGH;
-            }
-            else
-            {
-                EPwm1Regs.CMPA.half.CMPA = final_duty * 2250;
-                EPwm1Regs.CMPB = final_duty * 2250;
-                EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_HIGH;
-                EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
-            }
+                PfcDrive(final_duty);   // fast-leg duty + carrier polarity, slow-leg commutation
             }
             else
             {
@@ -1072,10 +1095,89 @@ void Busloop(void)
     Vout_ref = Vout_soft;
 }
 
+//----------------------------------------------------------------------
+// EPWM1 both arms off, whatever polarity AQCTL currently holds.
+// The continuous force is what does it. The CMP pair written alongside is the
+// one that also means both-off under the CURRENT polarity, so the underlying
+// action-qualifier state agrees with the force. Both load at the next CTR=0.
+//----------------------------------------------------------------------
+void PfcLegOff(void)
+{
+    EPwm1Regs.AQCSFRC.all = PFC_CSF_BOTH_OFF;
+    if(pfc_aq_inv)
+    {
+        EPwm1Regs.CMPA.half.CMPA = 2250;   // INVERTED: A = 1 - CMPA/PRD = 0
+        EPwm1Regs.CMPB = 0;                //           B = CMPB/PRD     = 0
+    }
+    else
+    {
+        EPwm1Regs.CMPA.half.CMPA = 0;      // NORMAL:   A = CMPA/PRD     = 0
+        EPwm1Regs.CMPB = 2250;             //           B = 1 - CMPB/PRD = 0
+    }
+    if(!pfc_force_on)
+    {
+        pfc_force_on  = 1;
+        pfc_force_seq = pfc_isr_seq;
+    }
+}
+
+//----------------------------------------------------------------------
+// Per-cycle output mapping while the PFC runs. See the block comment at
+// PFC_AQA_NORMAL for why the polarity follows the sign of the line voltage.
+//
+//   b1 > 0 : NORMAL,   EPWM1B = boost arm (d),  EPWM1A = (1-d) about CTR=0
+//   b1 < 0 : INVERTED, EPWM1A = boost arm (d),  EPWM1B = (1-d) about CTR=0
+//
+// Sequence at a zero crossing (each write lands at the next CTR=0 unless noted):
+//   ISR n   |b1| < 2      : request both-off force            -> pins off from cycle n+1
+//   ISR n+1 force is live : flip AQCTL (immediate, pins held) ; if now outside the
+//                           window also load the duty and release -> switching from n+2
+// If b1 ever steps across the window without an ISR landing inside it, the
+// polarity mismatch itself forces one off cycle first - a swap never happens
+// with live pulses. The first cycle after a release misses half of the (1-d)
+// arm's pulse (its body diode carries that), exactly as the old code did.
+//----------------------------------------------------------------------
+void PfcDrive(float duty_cmd)
+{
+    int want_inv   = (b1 < 0.0f);
+    int in_window  = (b1 < 2 && b1 > -2);
+    int force_live = (pfc_force_on && pfc_isr_seq != pfc_force_seq);
+
+    if(force_live && want_inv != pfc_aq_inv)
+    {
+        EPwm1Regs.AQCTLA.all = want_inv ? PFC_AQA_INVERTED : PFC_AQA_NORMAL;
+        EPwm1Regs.AQCTLB.all = want_inv ? PFC_AQB_INVERTED : PFC_AQB_NORMAL;
+        pfc_aq_inv = want_inv;
+    }
+
+    if(in_window || want_inv != pfc_aq_inv)
+    {
+        PfcLegOff();
+        EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;    // both slow-leg arms off through the zero crossing
+        EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
+    }
+    else
+    {
+        EPwm1Regs.CMPA.half.CMPA = (1 - duty_cmd) * 2250;
+        EPwm1Regs.CMPB = (1 - duty_cmd) * 2250;
+        EPwm1Regs.AQCSFRC.all = AQ_SW_OFF;         // release, at the same CTR=0 the duty loads
+        pfc_force_on = 0;
+        if(want_inv)
+        {
+            EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_HIGH;
+            EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
+        }
+        else
+        {
+            EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;
+            EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_HIGH;
+        }
+    }
+}
+
 void SetSafeOutputsPFC(void)
 {
-    EPwm1Regs.CMPA.half.CMPA = 0;   // 0% physical on-time for EPwm1 (POLSEL=HIC convention, same as main.c)
-    EPwm1Regs.CMPB = 2250;
+    PfcLegOff();                    // both EPWM1 arms off - polarity-independent, see PfcLegOff()
     EPwm2Regs.AQCSFRC.bit.CSFA = AQ_SW_LOW;   // both slow-leg arms off
     EPwm2Regs.AQCSFRC.bit.CSFB = AQ_SW_LOW;
     
